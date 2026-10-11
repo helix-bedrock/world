@@ -6,6 +6,11 @@ Code in this repo that was ported from other projects, as required by the
 | Helix path | Source project | Source path | Commit | License |
 |---|---|---|---|---|
 | `leveldb/` | [syndtr/goleveldb](https://github.com/syndtr/goleveldb) by Suryandaru Triandana | `leveldb/` | [`126854a`](https://github.com/syndtr/goleveldb/commit/126854af5e6d8295ef8e8bee3040dd8380ae72e8) | BSD-2-Clause (`leveldb/LICENSE`) |
+| `chunk/` | [df-mc/dragonfly](https://github.com/df-mc/dragonfly) by Dragonfly Tech | `server/world/chunk/` (including `legacy_states.nbt`) | [`1793369`](https://github.com/df-mc/dragonfly/commit/1793369709ceed934675d69e86ff6c828e4216c8) | MIT |
+| `cube/` (subset: `Pos`, `Range`, `Face`) | [df-mc/dragonfly](https://github.com/df-mc/dragonfly) by Dragonfly Tech | `server/block/cube/pos.go`, `range.go`, `face.go` | [`1793369`](https://github.com/df-mc/dragonfly/commit/1793369709ceed934675d69e86ff6c828e4216c8) | MIT |
+| `blockupgrader/*.go` | [df-mc/worldupgrader](https://github.com/df-mc/worldupgrader) by Dragonfly | `blockupgrader/` | [`634e943`](https://github.com/df-mc/worldupgrader/commit/634e943988fa0e1b7985974863cba2463fdd431f) | MIT |
+| `blockupgrader/schemas/` (except `0351`) | [pmmp/BedrockBlockUpgradeSchema](https://github.com/pmmp/BedrockBlockUpgradeSchema) | `nbt_upgrade_schema/` | [`4e874a1`](https://github.com/pmmp/BedrockBlockUpgradeSchema/commit/4e874a162c4d41a9db7df72980e97849d6942d5d) | CC0-1.0 |
+| `blockupgrader/schemas/0351_1.26.40_to_1.26.50.json` | [df-mc/worldupgrader](https://github.com/df-mc/worldupgrader) | `blockupgrader/schemas/0351_1.26.40_to_1.26.50.27.json` | [`634e943`](https://github.com/df-mc/worldupgrader/commit/634e943988fa0e1b7985974863cba2463fdd431f) | MIT; version fields changed to 1.26.50.0 so it applies to states saved by 1.26.40 |
 | `leveldb/opt/options.go`, `leveldb/table/` (flate compression) | [df-mc/goleveldb](https://github.com/df-mc/goleveldb) by Dragonfly Tech | `leveldb/table/reader.go`, `writer.go`, `table.go`, `leveldb/opt/options.go` | [`e85415c`](https://github.com/df-mc/goleveldb/commit/e85415c04dab8522f9f67f66e1d25511478c1769) | BSD-2-Clause; reworked to remove package-level state |
 
 ## Unmerged upstream pull requests
@@ -45,3 +50,11 @@ and PRs that only change CI, docs or formatting.
   clamp or return an error, and compaction exits with `runtime.Goexit`
   instead of a recovered panic. `leveldb/testutil` (test helpers only) is
   excluded from the lint rule.
+- `chunk`: the legacy table and block upgrader live in an `Upgrader` value
+  passed to `DiskDecode` instead of package state; `LightArea` returns an
+  error; decoding rejects invalid palette sizes, palette counts over 4096,
+  palette indices past the palette, `nil` block storages and sub-chunk Y
+  values out of range (the last found by fuzzing) instead of crashing.
+- `blockupgrader`: schemas live in an `Upgrader` value; schemas that would
+  have panicked during an upgrade are rejected when loaded; `Upgrade` no
+  longer modifies the caller's property map.
