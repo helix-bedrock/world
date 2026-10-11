@@ -7,6 +7,7 @@ Code in this repo that was ported from other projects, as required by the
 |---|---|---|---|---|
 | `leveldb/` | [syndtr/goleveldb](https://github.com/syndtr/goleveldb) by Suryandaru Triandana | `leveldb/` | [`126854a`](https://github.com/syndtr/goleveldb/commit/126854af5e6d8295ef8e8bee3040dd8380ae72e8) | BSD-2-Clause (`leveldb/LICENSE`) |
 | `chunk/` | [df-mc/dragonfly](https://github.com/df-mc/dragonfly) by Dragonfly Tech | `server/world/chunk/` (including `legacy_states.nbt`) | [`1793369`](https://github.com/df-mc/dragonfly/commit/1793369709ceed934675d69e86ff6c828e4216c8) | MIT |
+| `mcdb/` | [df-mc/dragonfly](https://github.com/df-mc/dragonfly) by Dragonfly Tech | `server/world/mcdb/` | [`1793369`](https://github.com/df-mc/dragonfly/commit/1793369709ceed934675d69e86ff6c828e4216c8) | MIT |
 | `cube/` (subset: `Pos`, `Range`, `Face`) | [df-mc/dragonfly](https://github.com/df-mc/dragonfly) by Dragonfly Tech | `server/block/cube/pos.go`, `range.go`, `face.go` | [`1793369`](https://github.com/df-mc/dragonfly/commit/1793369709ceed934675d69e86ff6c828e4216c8) | MIT |
 | `blockupgrader/*.go` | [df-mc/worldupgrader](https://github.com/df-mc/worldupgrader) by Dragonfly | `blockupgrader/` | [`634e943`](https://github.com/df-mc/worldupgrader/commit/634e943988fa0e1b7985974863cba2463fdd431f) | MIT |
 | `blockupgrader/schemas/` (except `0351`) | [pmmp/BedrockBlockUpgradeSchema](https://github.com/pmmp/BedrockBlockUpgradeSchema) | `nbt_upgrade_schema/` | [`4e874a1`](https://github.com/pmmp/BedrockBlockUpgradeSchema/commit/4e874a162c4d41a9db7df72980e97849d6942d5d) | CC0-1.0 |
@@ -58,3 +59,10 @@ and PRs that only change CI, docs or formatting.
 - `blockupgrader`: schemas live in an `Upgrader` value; schemas that would
   have panicked during an upgrade are rejected when loaded; `Upgrade` no
   longer modifies the caller's property map.
+- `mcdb`: plain `ChunkPos` and `Dimension` types instead of Dragonfly's
+  engine types, `level.dat` values exposed directly, player IDs as strings
+  (no `uuid` dependency), no default logger, and no panics. Unknown
+  `level.dat` fields are kept and written back; `level.dat` is replaced
+  atomically and its header length is checked. Entity ID lists of the wrong
+  length, unknown dimensions and failed scheduled updates are handled
+  instead of crashing, and the column iterator no longer recurses per key.
