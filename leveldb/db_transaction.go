@@ -309,7 +309,8 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 	}
 
 	if db.tr != nil {
-		panic("leveldb: has open transaction")
+		<-db.writeLockC
+		return nil, errHasTransaction
 	}
 
 	// Flush current memdb.

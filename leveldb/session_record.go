@@ -9,6 +9,7 @@ package leveldb
 import (
 	"bufio"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"strings"
 
@@ -140,7 +141,10 @@ func (p *sessionRecord) putUvarint(w io.Writer, x uint64) {
 
 func (p *sessionRecord) putVarint(w io.Writer, x int64) {
 	if x < 0 {
-		panic("invalid negative value")
+		if p.err == nil {
+			p.err = fmt.Errorf("leveldb: session record: negative value %d", x)
+		}
+		return
 	}
 	p.putUvarint(w, uint64(x))
 }

@@ -8,6 +8,7 @@ package leveldb
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,9 +18,7 @@ import (
 	"github.com/helix-bedrock/world/leveldb/storage"
 )
 
-var (
-	errCompactionTransactExiting = errors.New("leveldb: compaction transact exiting")
-)
+var ()
 
 type cStat struct {
 	duration time.Duration
@@ -150,14 +149,14 @@ type compactionTransactInterface interface {
 }
 
 func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
+	// compactionExitTransact ends the goroutine with runtime.Goexit, which
+	// still runs this deferred call; finished tells a normal return apart.
+	finished := false
 	defer func() {
-		if x := recover(); x != nil {
-			if x == errCompactionTransactExiting {
-				if err := t.revert(); err != nil {
-					db.logf("%s revert error %q", name, err)
-				}
+		if !finished {
+			if err := t.revert(); err != nil {
+				db.logf("%s revert error %q", name, err)
 			}
-			panic(x)
 		}
 	}()
 
@@ -202,6 +201,7 @@ func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 			db.compactionExitTransact()
 		}
 		if err == nil {
+			finished = true
 			return
 		}
 		if errors.IsCorrupted(err) {
@@ -254,8 +254,12 @@ func (db *DB) compactionTransactFunc(name string, run func(cnt *compactionTransa
 	db.compactionTransact(name, &compactionTransactFunc{run, revert})
 }
 
+// compactionExitTransact stops the calling compaction goroutine. Upstream
+// panicked with errCompactionTransactExiting and recovered it; Goexit runs
+// the same deferred cleanup without a panic. It must only be called from the
+// mCompaction and tCompaction goroutines.
 func (db *DB) compactionExitTransact() {
-	panic(errCompactionTransactExiting)
+	runtime.Goexit()
 }
 
 func (db *DB) compactionCommit(name string, rec *sessionRecord) {
@@ -769,11 +773,6 @@ func (db *DB) mCompaction() {
 	var x cCmd
 
 	defer func() {
-		if x := recover(); x != nil {
-			if x != errCompactionTransactExiting {
-				panic(x)
-			}
-		}
 		if x != nil {
 			x.ack(ErrClosed)
 		}
@@ -789,7 +788,8 @@ func (db *DB) mCompaction() {
 				x.ack(nil)
 				x = nil
 			default:
-				panic("leveldb: unknown command")
+				db.logf("memdb@compaction unknown command %T", x)
+				x = nil
 			}
 		case <-db.closeC:
 			return
@@ -804,11 +804,6 @@ func (db *DB) tCompaction() {
 	)
 
 	defer func() {
-		if x := recover(); x != nil {
-			if x != errCompactionTransactExiting {
-				panic(x)
-			}
-		}
 		for i := range waitQ {
 			waitQ[i].ack(ErrClosed)
 			waitQ[i] = nil
@@ -867,7 +862,7 @@ func (db *DB) tCompaction() {
 			case cRange:
 				x.ack(db.tableRangeCompaction(cmd.level, cmd.min, cmd.max))
 			default:
-				panic("leveldb: unknown command")
+				db.logf("table@compaction unknown command %T", x)
 			}
 			x = nil
 		}

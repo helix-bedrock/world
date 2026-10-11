@@ -37,7 +37,11 @@ func (db *DB) acquireSnapshot() *snapshotElement {
 			se.ref++
 			return se
 		} else if seq < se.seq {
-			panic("leveldb: sequence number is not increasing")
+			// Cannot happen: the sequence only grows. Upstream panicked;
+			// reuse the newest snapshot so the list stays ordered.
+			db.logf("snapshot: sequence number %d below newest %d", seq, se.seq)
+			se.ref++
+			return se
 		}
 	}
 	se := &snapshotElement{seq: seq, ref: 1}
@@ -55,7 +59,7 @@ func (db *DB) releaseSnapshot(se *snapshotElement) {
 		db.snapsList.Remove(se.e)
 		se.e = nil
 	} else if se.ref < 0 {
-		panic("leveldb: Snapshot: negative element reference")
+		se.ref = 0 // double release; upstream panicked
 	}
 }
 

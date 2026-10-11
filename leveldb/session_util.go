@@ -86,7 +86,9 @@ func (s *session) refLoop() {
 		} else if ref == 0 {
 			delete(fileRef, fnum)
 		} else {
-			panic(fmt.Sprintf("negative ref: %v", fnum))
+			// Internal bug; upstream panicked.
+			s.logf("session: negative ref for file %d", fnum)
+			delete(fileRef, fnum)
 		}
 		return ref
 	}
@@ -189,7 +191,8 @@ func (s *session) refLoop() {
 		select {
 		case t := <-s.refCh:
 			if _, exist := ref[t.vid]; exist {
-				panic("duplicate reference request")
+				s.logf("session: duplicate reference request for version %d", t.vid)
+				continue
 			}
 			ref[t.vid] = t
 			if t.vid > last {
@@ -199,7 +202,8 @@ func (s *session) refLoop() {
 		case d := <-s.deltaCh:
 			if _, exist := ref[d.vid]; !exist {
 				if _, exist2 := referenced[d.vid]; !exist2 {
-					panic("invalid release request")
+					s.logf("session: invalid release request for version %d", d.vid)
+					continue
 				}
 				// The reference opt is already expired, apply
 				// delta here.
@@ -221,7 +225,8 @@ func (s *session) refLoop() {
 				continue
 			}
 			if _, exist := ref[t.vid]; !exist {
-				panic("invalid release request")
+				s.logf("session: invalid release request for version %d", t.vid)
+				continue
 			}
 			released[t.vid] = deltas[t.vid]
 			delete(deltas, t.vid)

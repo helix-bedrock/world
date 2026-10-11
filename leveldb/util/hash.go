@@ -29,8 +29,6 @@ func Hash(data []byte, seed uint32) uint32 {
 	}
 
 	switch len(data) - i {
-	default:
-		panic("not reached")
 	case 3:
 		h += uint32(data[i+2]) << 16
 		fallthrough

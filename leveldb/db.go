@@ -772,8 +772,7 @@ func memGet(mdb *memdb.DB, ikey internalKey, icmp *iComparer) (ok bool, mv []byt
 	if err == nil {
 		ukey, _, kt, kerr := parseInternalKey(mk)
 		if kerr != nil {
-			// Shouldn't have had happen.
-			panic(kerr)
+			return false, nil, kerr
 		}
 		if icmp.uCompare(ukey, ikey.ukey()) == 0 {
 			if kt == keyTypeDel {

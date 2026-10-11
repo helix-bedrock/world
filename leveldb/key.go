@@ -73,10 +73,13 @@ func init() {
 type internalKey []byte
 
 func makeInternalKey(dst, ukey []byte, seq uint64, kt keyType) internalKey {
+	// Callers validate both (see decodeBatchToMem); upstream panicked here.
+	// Clamp so an internal bug cannot crash the server.
 	if seq > keyMaxSeq {
-		panic("leveldb: invalid sequence number")
-	} else if kt > keyTypeVal {
-		panic("leveldb: invalid type")
+		seq = keyMaxSeq
+	}
+	if kt > keyTypeVal {
+		kt = keyTypeVal
 	}
 
 	dst = ensureBuffer(dst, len(ukey)+8)
@@ -103,31 +106,28 @@ func validInternalKey(ik []byte) bool {
 	return err == nil
 }
 
-func (ik internalKey) assert() {
-	if ik == nil {
-		panic("leveldb: nil internalKey")
-	}
-	if len(ik) < 8 {
-		panic(fmt.Sprintf("leveldb: internal key %q, len=%d: invalid length", []byte(ik), len(ik)))
-	}
-}
-
+// ukey and num treat a key shorter than 8 bytes (upstream panicked) as an
+// empty user key with number 0. Keys read from disk are checked with
+// parseInternalKey first.
 func (ik internalKey) ukey() []byte {
-	ik.assert()
+	if len(ik) < 8 {
+		return nil
+	}
 	return ik[:len(ik)-8]
 }
 
 func (ik internalKey) num() uint64 {
-	ik.assert()
+	if len(ik) < 8 {
+		return 0
+	}
 	return binary.LittleEndian.Uint64(ik[len(ik)-8:])
 }
 
 func (ik internalKey) parseNum() (seq uint64, kt keyType) {
 	num := ik.num()
 	seq, kt = num>>8, keyType(num&0xff)
-	if kt > keyTypeVal {
-		panic(fmt.Sprintf("leveldb: internal key %q, len=%d: invalid type %#x", []byte(ik), len(ik), kt))
-	}
+	// An invalid type (upstream panicked) is passed on; readers treat
+	// anything but keyTypeVal as not found.
 	return
 }
 

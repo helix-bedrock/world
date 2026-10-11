@@ -43,9 +43,8 @@ func (m *memDB) decref() {
 		}
 		m.db = nil
 		m.DB = nil
-	} else if ref < 0 {
-		panic("negative memdb ref")
 	}
+	// A negative ref is a double release; upstream panicked.
 }
 
 // Get latest sequence number.
@@ -162,10 +161,9 @@ func (db *DB) newMem(n int) (mem *memDB, err error) {
 func (db *DB) getMems() (e, f *memDB) {
 	db.memMu.RLock()
 	defer db.memMu.RUnlock()
+	// db.mem is only nil once closed; callers already handle that case.
 	if db.mem != nil {
 		db.mem.incref()
-	} else if !db.isClosed() {
-		panic("nil effective mem")
 	}
 	if db.frozenMem != nil {
 		db.frozenMem.incref()
@@ -179,8 +177,6 @@ func (db *DB) getEffectiveMem() *memDB {
 	defer db.memMu.RUnlock()
 	if db.mem != nil {
 		db.mem.incref()
-	} else if !db.isClosed() {
-		panic("nil effective mem")
 	}
 	return db.mem
 }

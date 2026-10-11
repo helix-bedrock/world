@@ -17,4 +17,6 @@ var (
 	ErrSnapshotReleased = errors.New("leveldb: snapshot released")
 	ErrIterReleased     = errors.New("leveldb: iterator released")
 	ErrClosed           = errors.New("leveldb: closed")
+
+	errHasTransaction = errors.New("leveldb: has open transaction")
 )

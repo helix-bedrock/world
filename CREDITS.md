@@ -41,3 +41,7 @@ and PRs that only change CI, docs or formatting.
   (BSD-3-Clause, branch `mojang-compatible`); no code was copied.
 - Compaction reply channels are buffered and never closed, fixing a data race
   that upstream hid with `recover()` (`TestDB_TransientError` under `-race`).
+- No `panic` in library code. Upstream's internal "BUG" checks now log,
+  clamp or return an error, and compaction exits with `runtime.Goexit`
+  instead of a recovered panic. `leveldb/testutil` (test helpers only) is
+  excluded from the lint rule.

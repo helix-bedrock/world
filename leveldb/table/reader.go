@@ -439,11 +439,13 @@ func (i *blockIter) Release() {
 }
 
 func (i *blockIter) SetReleaser(releaser util.Releaser) {
-	if i.dir == dirReleased {
-		panic(util.ErrReleased)
-	}
-	if i.releaser != nil && releaser != nil {
-		panic(util.ErrHasReleaser)
+	// Misuse (released, or a releaser already set) used to panic. Release
+	// the incoming releaser instead so it does not leak.
+	if i.dir == dirReleased || (i.releaser != nil && releaser != nil) {
+		if releaser != nil {
+			releaser.Release()
+		}
+		return
 	}
 	i.releaser = releaser
 }

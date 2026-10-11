@@ -8,8 +8,9 @@ package filter
 
 import (
 	"encoding/binary"
-	"github.com/helix-bedrock/world/leveldb/util"
 	"testing"
+
+	"github.com/helix-bedrock/world/leveldb/util"
 )
 
 type harness struct {

@@ -37,10 +37,8 @@ type mergedIterator struct {
 	heap indexHeap
 }
 
+// assertKey used to panic on a nil key; a nil key now compares as empty.
 func assertKey(key []byte) []byte {
-	if key == nil {
-		panic("leveldb/iterator: nil key")
-	}
 	return key
 }
 
@@ -269,11 +267,13 @@ func (i *mergedIterator) Release() {
 }
 
 func (i *mergedIterator) SetReleaser(releaser util.Releaser) {
-	if i.dir == dirReleased {
-		panic(util.ErrReleased)
-	}
-	if i.releaser != nil && releaser != nil {
-		panic(util.ErrHasReleaser)
+	// Misuse (released, or a releaser already set) used to panic. Release
+	// the incoming releaser instead so it does not leak.
+	if i.dir == dirReleased || (i.releaser != nil && releaser != nil) {
+		if releaser != nil {
+			releaser.Release()
+		}
+		return
 	}
 	i.releaser = releaser
 }

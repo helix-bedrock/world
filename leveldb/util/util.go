@@ -59,11 +59,13 @@ func (r *BasicReleaser) Release() {
 
 // SetReleaser implements ReleaseSetter.SetReleaser.
 func (r *BasicReleaser) SetReleaser(releaser Releaser) {
-	if r.released {
-		panic(ErrReleased)
-	}
-	if r.releaser != nil && releaser != nil {
-		panic(ErrHasReleaser)
+	// Misuse (released, or a releaser already set) used to panic. Release
+	// the incoming releaser instead so it does not leak.
+	if r.released || (r.releaser != nil && releaser != nil) {
+		if releaser != nil {
+			releaser.Release()
+		}
+		return
 	}
 	r.releaser = releaser
 }

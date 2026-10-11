@@ -353,7 +353,11 @@ func TestLRUCache_GetLatency(t *testing.T) {
 	t.Logf("set=%d getHit=%d getAll=%d getMaxLatency=%v getAvgLatency=%v",
 		set, getHit, getAll, time.Duration(getMaxLatency), getAvgLatency)
 
-	require.LessOrEqual(t, getAvgLatency, delay/3)
+	if raceEnabled || testing.Short() {
+		t.Skip("latency check is timing-sensitive; skipped under -race and -short")
+	}
+	// int64: the testify version in go.mod cannot compare time.Duration.
+	require.LessOrEqual(t, int64(getAvgLatency), int64(delay/3))
 	t.Logf("STATS: %#v", c.GetStats())
 }
 

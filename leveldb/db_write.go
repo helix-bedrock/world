@@ -47,7 +47,7 @@ retry:
 	if err != nil {
 		if err == errHasFrozenMem {
 			if retryLimit <= 0 {
-				panic("BUG: still has frozen memdb")
+				return nil, err
 			}
 			goto retry
 		}
@@ -236,7 +236,10 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	// Put batches.
 	for _, batch := range batches {
 		if err := batch.putMem(seq, mdb.DB); err != nil {
-			panic(err)
+			// The journal already holds the batch, so reopening the DB
+			// replays it. Upstream panicked here.
+			db.unlockWrite(overflow, merged, err)
+			return err
 		}
 		seq += uint64(batch.Len())
 	}

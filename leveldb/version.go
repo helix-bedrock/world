@@ -50,7 +50,7 @@ func newVersion(s *session) *version {
 
 func (v *version) incref() {
 	if v.released {
-		panic("already released")
+		return // internal bug; upstream panicked
 	}
 
 	v.ref++
@@ -69,7 +69,8 @@ func (v *version) releaseNB() {
 	if v.ref > 0 {
 		return
 	} else if v.ref < 0 {
-		panic("negative version ref")
+		v.ref = 0 // double release; upstream panicked
+		return
 	}
 	select {
 	case v.s.relCh <- &vTask{vid: v.id, files: v.levels, created: time.Now()}:
@@ -204,9 +205,7 @@ func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue
 					case keyTypeVal:
 						value = fval
 						err = nil
-					case keyTypeDel:
-					default:
-						panic("leveldb: invalid internalKey type")
+					default: // keyTypeDel, or an invalid type: not found
 					}
 					return false
 				}
@@ -223,9 +222,7 @@ func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue
 			case keyTypeVal:
 				value = zval
 				err = nil
-			case keyTypeDel:
-			default:
-				panic("leveldb: invalid internalKey type")
+			default: // keyTypeDel, or an invalid type: not found
 			}
 			return false
 		}

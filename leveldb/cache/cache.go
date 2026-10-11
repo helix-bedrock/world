@@ -100,22 +100,16 @@ type mBucket struct {
 func (b *mBucket) freeze() mNodes {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Freezing an uninitialized bucket is an internal bug; upstream
+	// panicked. Its node list is empty, so returning it is harmless.
 	if b.state == bucketInitialized {
 		b.state = bucketFrozen
-	} else if b.state == bucketUninitialized {
-		panic("BUG: freeze uninitialized bucket")
 	}
 	return b.nodes
 }
 
 func (b *mBucket) frozen() bool {
-	if b.state == bucketFrozen {
-		return true
-	}
-	if b.state == bucketUninitialized {
-		panic("BUG: accessing uninitialized bucket")
-	}
-	return false
+	return b.state == bucketFrozen
 }
 
 func (b *mBucket) get(r *Cache, h *mHead, hash uint32, ns, key uint64, getOnly bool) (done, created bool, n *Node) {
@@ -177,12 +171,12 @@ func (b *mBucket) get(r *Cache, h *mHead, hash uint32, ns, key uint64, getOnly b
 			growThreshold:   int64(nhLen * mOverflowThreshold),
 			shrinkThreshold: int64(nhLen >> 1),
 		}
-		ok := atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh))
-		if !ok {
-			panic("BUG: failed swapping head")
+		// Callers hold r.mu, so the swap cannot fail; if it ever does,
+		// skip growing instead of panicking.
+		if atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh)) {
+			atomic.AddInt32(&r.statGrow, 1)
+			go nh.initBuckets()
 		}
-		atomic.AddInt32(&r.statGrow, 1)
-		go nh.initBuckets()
 	}
 
 	return true, true, n
@@ -247,12 +241,10 @@ func (b *mBucket) delete(r *Cache, h *mHead, hash uint32, ns, key uint64) (done,
 				growThreshold:   int64(nhLen * mOverflowThreshold),
 				shrinkThreshold: int64(nhLen >> 1),
 			}
-			ok := atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh))
-			if !ok {
-				panic("BUG: failed swapping head")
+			if atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh)) {
+				atomic.AddInt32(&r.statShrink, 1)
+				go nh.initBuckets()
 			}
-			atomic.AddInt32(&r.statShrink, 1)
-			go nh.initBuckets()
 		}
 	}
 
@@ -280,7 +272,11 @@ func (h *mHead) initBucket(i uint32) *mBucket {
 
 	p := (*mHead)(atomic.LoadPointer(&h.predecessor))
 	if p == nil {
-		panic("BUG: uninitialized bucket doesn't have predecessor")
+		// Internal bug (upstream panicked). This is a cache, so starting
+		// the bucket empty only costs cache misses.
+		b.state = bucketInitialized
+		b.mu.Unlock()
+		return b
 	}
 
 	var nodes mNodes
@@ -723,9 +719,8 @@ func (n *Node) Ref() int32 {
 
 // GetHandle returns an handle for this 'cache node'.
 func (n *Node) GetHandle() *Handle {
-	if atomic.AddInt32(&n.ref, 1) <= 1 {
-		panic("BUG: Node.GetHandle on zero ref")
-	}
+	// Upstream panicked if the node had no references (an internal bug).
+	atomic.AddInt32(&n.ref, 1)
 	return &Handle{unsafe.Pointer(n)}
 }
 

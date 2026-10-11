@@ -9,6 +9,7 @@ package util
 
 import (
 	"bytes"
+	"errors"
 	"io"
 )
 
@@ -44,15 +45,16 @@ func (b *Buffer) String() string {
 func (b *Buffer) Len() int { return len(b.buf) - b.off }
 
 // Truncate discards all but the first n unread bytes from the buffer.
-// It panics if n is negative or greater than the length of the buffer.
+// n is clamped to the range [0, Len()].
 func (b *Buffer) Truncate(n int) {
 	if n == 0 {
 		b.Reset()
 		return
 	}
-	if n < 0 || n > b.Len() {
-		panic("leveldb/util.Buffer: truncation out of range")
+	if n < 0 {
+		n = 0
 	}
+	n = min(n, b.Len())
 	b.buf = b.buf[:b.off+n]
 }
 
@@ -76,7 +78,7 @@ func (b *Buffer) tryGrowByReslice(n int) (int, bool) {
 
 // grow grows the buffer to guarantee space for n more bytes.
 // It returns the index where bytes should be written.
-// If the buffer can't grow it will panic with bytes.ErrTooLarge.
+// Near the int limit it grows by exactly n instead of doubling.
 func (b *Buffer) grow(n int) int {
 	m := b.Len()
 	// If buffer is empty, reset to recover space.
@@ -99,7 +101,9 @@ func (b *Buffer) grow(n int) int {
 		// don't spend all our time copying.
 		copy(b.buf, b.buf[b.off:])
 	} else if c > maxInt-c-n {
-		panic(bytes.ErrTooLarge)
+		buf := makeSlice(m + n)
+		copy(buf, b.buf[b.off:])
+		b.buf = buf
 	} else {
 		// Not enough space anywhere, we need to allocate.
 		buf := makeSlice(2*c + n)
@@ -113,12 +117,9 @@ func (b *Buffer) grow(n int) int {
 }
 
 // Alloc allocs n bytes of slice from the buffer, growing the buffer as
-// needed. If n is negative, Alloc will panic.
-// If the buffer can't grow it will panic with bytes.ErrTooLarge.
+// needed. A negative n is treated as 0.
 func (b *Buffer) Alloc(n int) []byte {
-	if n < 0 {
-		panic("leveldb/util.Buffer.Alloc: negative count")
-	}
+	n = max(n, 0)
 	m, ok := b.tryGrowByReslice(n)
 	if !ok {
 		m = b.grow(n)
@@ -129,19 +130,15 @@ func (b *Buffer) Alloc(n int) []byte {
 // Grow grows the buffer's capacity, if necessary, to guarantee space for
 // another n bytes. After Grow(n), at least n bytes can be written to the
 // buffer without another allocation.
-// If n is negative, Grow will panic.
-// If the buffer can't grow it will panic with bytes.ErrTooLarge.
+// A negative n is treated as 0.
 func (b *Buffer) Grow(n int) {
-	if n < 0 {
-		panic("leveldb/util.Buffer.Grow: negative count")
-	}
+	n = max(n, 0)
 	m := b.grow(n)
 	b.buf = b.buf[:m]
 }
 
 // Write appends the contents of p to the buffer, growing the buffer as
-// needed. The return value n is the length of p; err is always nil. If the
-// buffer becomes too large, Write will panic with bytes.ErrTooLarge.
+// needed. The return value n is the length of p; err is always nil.
 func (b *Buffer) Write(p []byte) (n int, err error) {
 	m, ok := b.tryGrowByReslice(len(p))
 	if !ok {
@@ -158,15 +155,14 @@ const MinRead = 512
 
 // ReadFrom reads data from r until EOF and appends it to the buffer, growing
 // the buffer as needed. The return value n is the number of bytes read. Any
-// error except io.EOF encountered during the read is also returned. If the
-// buffer becomes too large, ReadFrom will panic with bytes.ErrTooLarge.
+// error except io.EOF encountered during the read is also returned.
 func (b *Buffer) ReadFrom(r io.Reader) (n int64, err error) {
 	for {
 		i := b.grow(MinRead)
 		b.buf = b.buf[:i]
 		m, e := r.Read(b.buf[i:cap(b.buf)])
 		if m < 0 {
-			panic("leveldb/util.Buffer.ReadFrom: reader returned negative count from Read")
+			return n, errNegativeRead
 		}
 
 		b.buf = b.buf[:i+m]
@@ -180,17 +176,15 @@ func (b *Buffer) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 }
 
-// makeSlice allocates a slice of size n. If the allocation fails, it panics
-// with bytes.ErrTooLarge.
+// makeSlice allocates a slice of size n.
 func makeSlice(n int) []byte {
-	// If the make fails, give a known error.
-	defer func() {
-		if recover() != nil {
-			panic(bytes.ErrTooLarge)
-		}
-	}()
 	return make([]byte, n)
 }
+
+var (
+	errNegativeRead = errors.New("leveldb/util.Buffer.ReadFrom: reader returned negative count from Read")
+	errInvalidWrite = errors.New("leveldb/util.Buffer.WriteTo: invalid Write count")
+)
 
 // WriteTo writes data to w until the buffer is drained or an error occurs.
 // The return value n is the number of bytes written; it always fits into an
@@ -200,8 +194,8 @@ func (b *Buffer) WriteTo(w io.Writer) (n int64, err error) {
 	if b.off < len(b.buf) {
 		nBytes := b.Len()
 		m, e := w.Write(b.buf[b.off:])
-		if m > nBytes {
-			panic("leveldb/util.Buffer.WriteTo: invalid Write count")
+		if m < 0 || m > nBytes {
+			return n, errInvalidWrite
 		}
 		b.off += m
 		n = int64(m)
@@ -221,8 +215,7 @@ func (b *Buffer) WriteTo(w io.Writer) (n int64, err error) {
 
 // WriteByte appends the byte c to the buffer, growing the buffer as needed.
 // The returned error is always nil, but is included to match bufio.Writer's
-// WriteByte. If the buffer becomes too large, WriteByte will panic with
-// bytes.ErrTooLarge.
+// WriteByte.
 func (b *Buffer) WriteByte(c byte) error {
 	m, ok := b.tryGrowByReslice(1)
 	if !ok {

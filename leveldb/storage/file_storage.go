@@ -629,7 +629,9 @@ func fsGenName(fd FileDesc) string {
 	case TypeTemp:
 		return fmt.Sprintf("%06d.tmp", fd.Num)
 	default:
-		panic("invalid file type")
+		// Not a real file type; upstream panicked. The name cannot match
+		// any file the database reads.
+		return fmt.Sprintf("%06d.invalid-type-%d", fd.Num, fd.Type)
 	}
 }
 

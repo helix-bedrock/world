@@ -379,7 +379,8 @@ func NewWriter(w io.Writer) *Writer {
 // fillHeader fills in the header for the pending chunk.
 func (w *Writer) fillHeader(last bool) {
 	if w.i+headerSize > w.j || w.j > blockSize {
-		panic("leveldb/journal: bad writer state")
+		w.err = errors.New("leveldb/journal: bad writer state")
+		return
 	}
 	if last {
 		if w.first {

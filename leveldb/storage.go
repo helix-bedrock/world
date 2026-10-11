@@ -1,8 +1,9 @@
 package leveldb
 
 import (
-	"github.com/helix-bedrock/world/leveldb/storage"
 	"sync/atomic"
+
+	"github.com/helix-bedrock/world/leveldb/storage"
 )
 
 type iStorage struct {

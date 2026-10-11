@@ -33,9 +33,8 @@ func (n *lruNode) remove() {
 		n.next.prev = n.prev
 		n.prev = nil
 		n.next = nil
-	} else {
-		panic("BUG: removing removed node")
 	}
+	// Removing an already removed node is a no-op (upstream panicked).
 }
 
 type lru struct {
@@ -65,7 +64,7 @@ func (r *lru) SetCapacity(capacity int) {
 	for r.used > r.capacity {
 		rn := r.recent.prev
 		if rn == nil {
-			panic("BUG: invalid LRU used or capacity counter")
+			break // counter out of sync; upstream panicked
 		}
 		rn.remove()
 		rn.n.CacheData = nil
@@ -93,7 +92,7 @@ func (r *lru) Promote(n *Node) {
 			for r.used > r.capacity {
 				rn := r.recent.prev
 				if rn == nil {
-					panic("BUG: invalid LRU used or capacity counter")
+					break // counter out of sync; upstream panicked
 				}
 				rn.remove()
 				rn.n.CacheData = nil
