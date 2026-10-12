@@ -10,6 +10,7 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"syscall"
 )
@@ -32,16 +33,16 @@ func newFileLock(path string, readOnly bool) (fl fileLock, err error) {
 	} else {
 		flag = os.O_RDWR
 	}
-	f, err := os.OpenFile(path, flag, 0)
+	f, err := os.OpenFile(path, flag, 0) //nolint:gosec // path is inside the database directory the caller opened
 	if os.IsNotExist(err) {
-		f, err = os.OpenFile(path, flag|os.O_CREATE, 0644)
+		f, err = os.OpenFile(path, flag|os.O_CREATE, 0644) //nolint:gosec // world files stay readable by other tools such as BDS
 	}
 	if err != nil {
 		return
 	}
 	err = setFileLock(f, readOnly, true)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return
 	}
 	fl = &unixFileLock{f: f}
@@ -65,18 +66,9 @@ func rename(oldpath, newpath string) error {
 }
 
 func isErrInvalid(err error) bool {
-	if err == os.ErrInvalid {
-		return true
-	}
-	// Go < 1.8
-	if syserr, ok := err.(*os.SyscallError); ok && syserr.Err == syscall.EINVAL {
-		return true
-	}
-	// Go >= 1.8 returns *os.PathError instead
-	if patherr, ok := err.(*os.PathError); ok && patherr.Err == syscall.EINVAL {
-		return true
-	}
-	return false
+	// errors.Is also unwraps the *os.SyscallError and *os.PathError that
+	// older Go versions returned around EINVAL.
+	return errors.Is(err, os.ErrInvalid) || errors.Is(err, syscall.EINVAL)
 }
 
 func syncDir(name string) error {
@@ -87,11 +79,11 @@ func syncDir(name string) error {
 	//   Calling fsync() does not necessarily ensure that the entry in the
 	//   directory containing the file has also reached disk. For that an
 	//   explicit fsync() on a file descriptor for the directory is also needed.
-	f, err := os.Open(name)
+	f, err := os.Open(name) //nolint:gosec // name is the database directory the caller opened
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := f.Sync(); err != nil && !isErrInvalid(err) {
 		return err
 	}
