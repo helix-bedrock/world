@@ -38,6 +38,12 @@ linters:
           - gosec
           - unparam
           - forbidigo
+      # Test-only helpers imported by leveldb's tests, never by library code.
+      - path: leveldb/testutil/
+        linters:
+          - gosec
+          - unparam
+          - forbidigo
 
 formatters:
   enable:

@@ -1,0 +1,97 @@
+// Ported from Dragonfly (MIT):
+// https://github.com/df-mc/dragonfly/blob/1793369709ceed934675d69e86ff6c828e4216c8/server/world/mcdb/conf.go
+//
+// Changed for Helix: no default logger or block registry, an explicit chunk
+// Upgrader, and errors instead of ignored ones.
+
+package mcdb
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+
+	"github.com/helix-bedrock/world/chunk"
+	"github.com/helix-bedrock/world/leveldb"
+	"github.com/helix-bedrock/world/leveldb/opt"
+	"github.com/helix-bedrock/world/mcdb/leveldat"
+)
+
+// Config holds the parameters of a DB.
+type Config struct {
+	// Log receives errors and debug messages. If nil, nothing is logged.
+	Log *slog.Logger
+	// LDBOptions holds LevelDB options such as block size or compression.
+	// If nil, Bedrock-compatible defaults are used.
+	LDBOptions *opt.Options
+
+	// Blocks maps block states to runtime IDs for chunk encoding. Required.
+	Blocks chunk.BlockRegistry
+	// Upgrader upgrades block states saved by older versions. If nil, Open
+	// creates one.
+	Upgrader *chunk.Upgrader
+}
+
+// Open opens the world in dir, creating it if needed. If a level.dat is
+// present it is read; otherwise default values are used.
+func (conf Config) Open(dir string) (*DB, error) {
+	if conf.Blocks == nil {
+		return nil, errors.New("open db: Config.Blocks is required")
+	}
+	if conf.Log == nil {
+		conf.Log = slog.New(slog.DiscardHandler)
+	}
+	conf.Log = conf.Log.With("provider", "mcdb")
+	if conf.Upgrader == nil {
+		up, err := chunk.NewUpgrader()
+		if err != nil {
+			return nil, fmt.Errorf("open db: %w", err)
+		}
+		conf.Upgrader = up
+	}
+	ldbOpts := opt.Options{}
+	if conf.LDBOptions != nil {
+		ldbOpts = *conf.LDBOptions
+	}
+	if ldbOpts.BlockSize == 0 {
+		ldbOpts.BlockSize = 16 * opt.KiB
+	}
+	if ldbOpts.Compression == opt.DefaultCompression {
+		// Bedrock only reads its own compression.
+		ldbOpts.Compression = opt.FlateCompression
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, "db"), 0o755); err != nil { //nolint:gosec // world folders are meant to be readable by other tools
+		return nil, fmt.Errorf("open db: create directory: %w", err)
+	}
+
+	db := &DB{conf: conf, dir: dir, ldat: &leveldat.Data{}, ldatFile: &leveldat.LevelDat{}}
+	ldatPath := filepath.Join(dir, "level.dat")
+	if _, err := os.Stat(ldatPath); errors.Is(err, os.ErrNotExist) {
+		db.ldat.FillDefault()
+	} else if err != nil {
+		return nil, fmt.Errorf("open db: stat level.dat: %w", err)
+	} else {
+		ldat, err := leveldat.ReadFile(ldatPath)
+		if err != nil {
+			return nil, fmt.Errorf("open db: %w", err)
+		}
+		// Bedrock has written storage version 10 for years; older worlds
+		// (below 10) are read anyway, newer ones may have changed format.
+		if ver := ldat.Ver(); ver > leveldat.Version {
+			return nil, fmt.Errorf("open db: level.dat version %v is unsupported", ver)
+		}
+		if err = ldat.Unmarshal(db.ldat); err != nil {
+			return nil, fmt.Errorf("open db: %w", err)
+		}
+		db.ldatFile = ldat
+	}
+	ldb, err := leveldb.OpenFile(filepath.Join(dir, "db"), &ldbOpts)
+	if err != nil {
+		return nil, fmt.Errorf("open db: leveldb: %w", err)
+	}
+	db.ldb = ldb
+	return db, nil
+}
