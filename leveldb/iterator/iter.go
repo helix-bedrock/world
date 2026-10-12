@@ -14,12 +14,13 @@ import (
 	"github.com/helix-bedrock/world/leveldb/util"
 )
 
+// ErrIterReleased is returned by a released iterator.
 var (
 	ErrIterReleased = errors.New("leveldb/iterator: iterator released")
 )
 
 // IteratorSeeker is the interface that wraps the 'seeks method'.
-type IteratorSeeker interface {
+type IteratorSeeker interface { //nolint:revive // keeps goleveldb's API name
 	// First moves the iterator to the first key/value pair. If the iterator
 	// only contains one key/value pair then First and Last would moves
 	// to the same key/value pair.

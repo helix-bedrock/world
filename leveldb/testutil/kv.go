@@ -15,15 +15,18 @@ import (
 	"github.com/helix-bedrock/world/leveldb/util"
 )
 
+// KeyValueEntry is one key/value pair.
 type KeyValueEntry struct {
 	key, value []byte
 }
 
+// KeyValue is a sorted list of key/value pairs used as a test model.
 type KeyValue struct {
 	entries []KeyValueEntry
 	nbytes  int
 }
 
+// Put inserts or replaces key, keeping the list sorted.
 func (kv *KeyValue) Put(key, value []byte) {
 	if n := len(kv.entries); n > 0 && cmp.Compare(kv.entries[n-1].key, key) >= 0 {
 		panic(fmt.Sprintf("Put: keys are not in increasing order: %q, %q", kv.entries[n-1].key, key))
@@ -32,10 +35,12 @@ func (kv *KeyValue) Put(key, value []byte) {
 	kv.nbytes += len(key) + len(value)
 }
 
+// PutString is Put with string arguments.
 func (kv *KeyValue) PutString(key, value string) {
 	kv.Put([]byte(key), []byte(value))
 }
 
+// PutU inserts key only if absent and reports whether it did.
 func (kv *KeyValue) PutU(key, value []byte) bool {
 	if i, exist := kv.Get(key); !exist {
 		if i < kv.Len() {
@@ -53,10 +58,12 @@ func (kv *KeyValue) PutU(key, value []byte) bool {
 	return false
 }
 
+// PutUString is PutU with string arguments.
 func (kv *KeyValue) PutUString(key, value string) bool {
 	return kv.PutU([]byte(key), []byte(value))
 }
 
+// Delete removes key and returns its value if it existed.
 func (kv *KeyValue) Delete(key []byte) (exist bool, value []byte) {
 	i, exist := kv.Get(key)
 	if exist {
@@ -66,6 +73,7 @@ func (kv *KeyValue) Delete(key []byte) (exist bool, value []byte) {
 	return
 }
 
+// DeleteIndex removes the i-th pair and reports whether i was valid.
 func (kv *KeyValue) DeleteIndex(i int) bool {
 	if i < kv.Len() {
 		kv.nbytes -= len(kv.KeyAt(i)) + len(kv.ValueAt(i))
@@ -75,22 +83,27 @@ func (kv *KeyValue) DeleteIndex(i int) bool {
 	return false
 }
 
+// Len returns the number of pairs.
 func (kv KeyValue) Len() int {
 	return len(kv.entries)
 }
 
+// Size returns the total length of all keys and values.
 func (kv *KeyValue) Size() int {
 	return kv.nbytes
 }
 
+// KeyAt returns the i-th key.
 func (kv KeyValue) KeyAt(i int) []byte {
 	return kv.entries[i].key
 }
 
+// ValueAt returns the i-th value.
 func (kv KeyValue) ValueAt(i int) []byte {
 	return kv.entries[i].value
 }
 
+// Index returns the i-th pair.
 func (kv KeyValue) Index(i int) (key, value []byte) {
 	if i < 0 || i >= len(kv.entries) {
 		panic(fmt.Sprintf("Index #%d: out of range", i))
@@ -98,6 +111,7 @@ func (kv KeyValue) Index(i int) (key, value []byte) {
 	return kv.entries[i].key, kv.entries[i].value
 }
 
+// IndexInexact returns the i-th pair and a key that sorts just before it.
 func (kv KeyValue) IndexInexact(i int) (key_, key, value []byte) {
 	key, value = kv.Index(i)
 	var key0 []byte
@@ -109,6 +123,7 @@ func (kv KeyValue) IndexInexact(i int) (key_, key, value []byte) {
 	return
 }
 
+// IndexOrNil returns the i-th pair, or nils if i is out of range.
 func (kv KeyValue) IndexOrNil(i int) (key, value []byte) {
 	if i >= 0 && i < len(kv.entries) {
 		return kv.entries[i].key, kv.entries[i].value
@@ -116,21 +131,25 @@ func (kv KeyValue) IndexOrNil(i int) (key, value []byte) {
 	return nil, nil
 }
 
+// IndexString is Index returning strings.
 func (kv KeyValue) IndexString(i int) (key, value string) {
 	key_, _value := kv.Index(i)
 	return string(key_), string(_value)
 }
 
+// Search returns the index of the first key not less than key.
 func (kv KeyValue) Search(key []byte) int {
 	return sort.Search(kv.Len(), func(i int) bool {
 		return cmp.Compare(kv.KeyAt(i), key) >= 0
 	})
 }
 
+// SearchString is Search with a string key.
 func (kv KeyValue) SearchString(key string) int {
 	return kv.Search([]byte(key))
 }
 
+// Get returns the index of key and whether it exists.
 func (kv KeyValue) Get(key []byte) (i int, exist bool) {
 	i = kv.Search(key)
 	if i < kv.Len() && cmp.Compare(kv.KeyAt(i), key) == 0 {
@@ -139,34 +158,40 @@ func (kv KeyValue) Get(key []byte) (i int, exist bool) {
 	return
 }
 
+// GetString is Get with a string key.
 func (kv KeyValue) GetString(key string) (i int, exist bool) {
 	return kv.Get([]byte(key))
 }
 
+// Iterate calls fn for every pair in order.
 func (kv KeyValue) Iterate(fn func(i int, key, value []byte)) {
 	for i, x := range kv.entries {
 		fn(i, x.key, x.value)
 	}
 }
 
+// IterateString is Iterate with strings.
 func (kv KeyValue) IterateString(fn func(i int, key, value string)) {
 	kv.Iterate(func(i int, key, value []byte) {
 		fn(i, string(key), string(value))
 	})
 }
 
+// IterateShuffled calls fn for every pair in a random order.
 func (kv KeyValue) IterateShuffled(rnd *rand.Rand, fn func(i int, key, value []byte)) {
 	ShuffledIndex(rnd, kv.Len(), 1, func(i int) {
 		fn(i, kv.entries[i].key, kv.entries[i].value)
 	})
 }
 
+// IterateShuffledString is IterateShuffled with strings.
 func (kv KeyValue) IterateShuffledString(rnd *rand.Rand, fn func(i int, key, value string)) {
 	kv.IterateShuffled(rnd, func(i int, key, value []byte) {
 		fn(i, string(key), string(value))
 	})
 }
 
+// IterateInexact is Iterate that also passes a key sorting just before each key.
 func (kv KeyValue) IterateInexact(fn func(i int, key_, key, value []byte)) {
 	for i := range kv.entries {
 		key_, key, value := kv.IndexInexact(i)
@@ -174,16 +199,19 @@ func (kv KeyValue) IterateInexact(fn func(i int, key_, key, value []byte)) {
 	}
 }
 
+// IterateInexactString is IterateInexact with strings.
 func (kv KeyValue) IterateInexactString(fn func(i int, key_, key, value string)) {
 	kv.IterateInexact(func(i int, key_, key, value []byte) {
 		fn(i, string(key_), string(key), string(value))
 	})
 }
 
+// Clone returns a copy that shares no slices with kv.
 func (kv KeyValue) Clone() KeyValue {
 	return KeyValue{append([]KeyValueEntry{}, kv.entries...), kv.nbytes}
 }
 
+// Slice returns pairs start through limit-1.
 func (kv KeyValue) Slice(start, limit int) KeyValue {
 	if start < 0 || limit > kv.Len() {
 		panic(fmt.Sprintf("Slice %d .. %d: out of range", start, limit))
@@ -193,6 +221,7 @@ func (kv KeyValue) Slice(start, limit int) KeyValue {
 	return KeyValue{append([]KeyValueEntry{}, kv.entries[start:limit]...), kv.nbytes}
 }
 
+// SliceKey returns the pairs from start to limit by key.
 func (kv KeyValue) SliceKey(start, limit []byte) KeyValue {
 	start_ := 0
 	limit_ := kv.Len()
@@ -205,10 +234,12 @@ func (kv KeyValue) SliceKey(start, limit []byte) KeyValue {
 	return kv.Slice(start_, limit_)
 }
 
+// SliceKeyString is SliceKey with string keys.
 func (kv KeyValue) SliceKeyString(start, limit string) KeyValue {
 	return kv.SliceKey([]byte(start), []byte(limit))
 }
 
+// SliceRange returns the pairs inside r.
 func (kv KeyValue) SliceRange(r *util.Range) KeyValue {
 	if r != nil {
 		return kv.SliceKey(r.Start, r.Limit)
@@ -216,6 +247,7 @@ func (kv KeyValue) SliceRange(r *util.Range) KeyValue {
 	return kv.Clone()
 }
 
+// Range returns the key range covering pairs start through limit-1.
 func (kv KeyValue) Range(start, limit int) (r util.Range) {
 	if kv.Len() > 0 {
 		if start == kv.Len() {
@@ -230,12 +262,14 @@ func (kv KeyValue) Range(start, limit int) (r util.Range) {
 	return
 }
 
+// KeyValue_EmptyKey returns a model holding one empty key.
 func KeyValue_EmptyKey() *KeyValue {
 	kv := &KeyValue{}
 	kv.PutString("", "v")
 	return kv
 }
 
+// KeyValue_EmptyValue returns a model with empty values.
 func KeyValue_EmptyValue() *KeyValue {
 	kv := &KeyValue{}
 	kv.PutString("abc", "")
@@ -243,24 +277,28 @@ func KeyValue_EmptyValue() *KeyValue {
 	return kv
 }
 
+// KeyValue_OneKeyValue returns a model with a single pair.
 func KeyValue_OneKeyValue() *KeyValue {
 	kv := &KeyValue{}
 	kv.PutString("abc", "v")
 	return kv
 }
 
+// KeyValue_BigValue returns a model with one large value.
 func KeyValue_BigValue() *KeyValue {
 	kv := &KeyValue{}
 	kv.PutString("big1", strings.Repeat("1", 200000))
 	return kv
 }
 
+// KeyValue_SpecialKey returns a model with a 0xff-filled key.
 func KeyValue_SpecialKey() *KeyValue {
 	kv := &KeyValue{}
 	kv.PutString("\xff\xff", "v3")
 	return kv
 }
 
+// KeyValue_MultipleKeyValue returns a fixed model with many pairs.
 func KeyValue_MultipleKeyValue() *KeyValue {
 	kv := &KeyValue{}
 	kv.PutString("a", "v")
@@ -292,6 +330,7 @@ func KeyValue_MultipleKeyValue() *KeyValue {
 
 var keymap = []byte("012345678ABCDEFGHIJKLMNOPQRSTUVWXYabcdefghijklmnopqrstuvwxy")
 
+// KeyValue_Generate returns random pairs with the given key and value lengths.
 func KeyValue_Generate(rnd *rand.Rand, n, incr, minlen, maxlen, vminlen, vmaxlen int) *KeyValue {
 	if rnd == nil {
 		rnd = NewRand()

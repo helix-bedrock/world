@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -51,7 +50,7 @@ func (p int64Slice) Less(i, j int) bool { return p[i] < p[j] }
 func (p int64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
 func writeFileSynced(filename string, data []byte, perm os.FileMode) error {
-	f, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm) //nolint:gosec // path is inside the database directory the caller opened
 	if err != nil {
 		return err
 	}
@@ -97,7 +96,7 @@ func OpenFile(path string, readOnly bool) (Storage, error) {
 			return nil, fmt.Errorf("leveldb/storage: open %s: not a directory", path)
 		}
 	} else if os.IsNotExist(err) && !readOnly {
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(path, 0755); err != nil { //nolint:gosec // world folders stay readable by other tools such as BDS
 			return nil, err
 		}
 	} else {
@@ -112,7 +111,7 @@ func OpenFile(path string, readOnly bool) (Storage, error) {
 	defer func() {
 		if err != nil {
 			if ferr := flock.release(); ferr != nil {
-				err = fmt.Errorf("error opening file (%v); error unlocking file (%v)", err, ferr)
+				err = fmt.Errorf("error opening file (%w); error unlocking file (%w)", err, ferr)
 			}
 		}
 	}()
@@ -122,13 +121,13 @@ func OpenFile(path string, readOnly bool) (Storage, error) {
 		logSize int64
 	)
 	if !readOnly {
-		logw, err = os.OpenFile(filepath.Join(path, "LOG"), os.O_WRONLY|os.O_CREATE, 0644)
+		logw, err = os.OpenFile(filepath.Join(path, "LOG"), os.O_WRONLY|os.O_CREATE, 0644) //nolint:gosec // path is inside the database directory the caller opened
 		if err != nil {
 			return nil, err
 		}
-		logSize, err = logw.Seek(0, os.SEEK_END)
+		logSize, err = logw.Seek(0, io.SeekEnd)
 		if err != nil {
-			logw.Close()
+			_ = logw.Close()
 			return nil, err
 		}
 	}
@@ -189,7 +188,7 @@ func (fs *fileStorage) printDay(t time.Time) error {
 func (fs *fileStorage) doLog(t time.Time, str string) {
 	if fs.logSize > logSizeThreshold {
 		// Rotate log file.
-		fs.logw.Close()
+		_ = fs.logw.Close()
 		fs.logw = nil
 		fs.logSize = 0
 		if err := rename(filepath.Join(fs.path, "LOG"), filepath.Join(fs.path, "LOG.old")); err != nil {
@@ -198,7 +197,7 @@ func (fs *fileStorage) doLog(t time.Time, str string) {
 	}
 	if fs.logw == nil {
 		var err error
-		fs.logw, err = os.OpenFile(filepath.Join(fs.path, "LOG"), os.O_WRONLY|os.O_CREATE, 0644)
+		fs.logw, err = os.OpenFile(filepath.Join(fs.path, "LOG"), os.O_WRONLY|os.O_CREATE, 0644) //nolint:gosec // world files stay readable by other tools such as BDS
 		if err != nil {
 			return
 		}
@@ -249,7 +248,7 @@ func (fs *fileStorage) setMeta(fd FileDesc) error {
 	// Check and backup old CURRENT file.
 	currentPath := filepath.Join(fs.path, "CURRENT")
 	if _, err := os.Stat(currentPath); err == nil {
-		b, err := ioutil.ReadFile(currentPath)
+		b, err := os.ReadFile(currentPath) //nolint:gosec // path is inside the database directory the caller opened
 		if err != nil {
 			fs.log(fmt.Sprintf("backup CURRENT: %v", err))
 			return err
@@ -328,7 +327,7 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 		fd   FileDesc
 	}
 	tryCurrent := func(name string) (*currentFile, error) {
-		b, err := ioutil.ReadFile(filepath.Join(fs.path, name))
+		b, err := os.ReadFile(filepath.Join(fs.path, name)) //nolint:gosec // path is inside the database directory the caller opened
 		if err != nil {
 			if os.IsNotExist(err) {
 				err = os.ErrNotExist
@@ -363,12 +362,14 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 			cur, err = tryCurrent(name)
 			if err == nil {
 				break
-			} else if err == os.ErrNotExist {
+			}
+			switch {
+			case errors.Is(err, os.ErrNotExist):
 				// Fallback to the next file.
-			} else if isCorrupted(err) {
+			case isCorrupted(err):
 				lastCerr = err
 				// Fallback to the next file.
-			} else {
+			default:
 				// In case the error is due to permission, etc.
 				return nil, err
 			}
@@ -405,14 +406,14 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 			pendNames[i] = fmt.Sprintf("CURRENT.%d", num)
 		}
 		pendCur, pendErr = tryCurrents(pendNames)
-		if pendErr != nil && pendErr != os.ErrNotExist && !isCorrupted(pendErr) {
+		if pendErr != nil && !errors.Is(pendErr, os.ErrNotExist) && !isCorrupted(pendErr) {
 			return FileDesc{}, pendErr
 		}
 	}
 
 	// Try CURRENT and CURRENT.bak.
 	curCur, curErr := tryCurrents([]string{"CURRENT", "CURRENT.bak"})
-	if curErr != nil && curErr != os.ErrNotExist && !isCorrupted(curErr) {
+	if curErr != nil && !errors.Is(curErr, os.ErrNotExist) && !isCorrupted(curErr) {
 		return FileDesc{}, curErr
 	}
 
@@ -508,7 +509,7 @@ func (fs *fileStorage) Create(fd FileDesc) (Writer, error) {
 	if fs.open < 0 {
 		return nil, ErrClosed
 	}
-	of, err := os.OpenFile(filepath.Join(fs.path, fsGenName(fd)), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	of, err := os.OpenFile(filepath.Join(fs.path, fsGenName(fd)), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644) //nolint:gosec // world files stay readable by other tools such as BDS
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +577,7 @@ func (fs *fileStorage) Close() error {
 	}
 	fs.open = -1
 	if fs.logw != nil {
-		fs.logw.Close()
+		_ = fs.logw.Close()
 	}
 	return fs.flock.release()
 }

@@ -7,8 +7,8 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -57,7 +57,7 @@ var invalidCases = []string{
 }
 
 func tempDir(t *testing.T) string {
-	dir, err := ioutil.TempDir("", "goleveldb-")
+	dir, err := os.MkdirTemp("", "goleveldb-")
 	if err != nil {
 		t.Fatal(t)
 	}
@@ -90,7 +90,7 @@ func TestFileStorage_MetaSetGet(t *testing.T) {
 		if _, err := w.Write([]byte("TEST")); err != nil {
 			t.Fatalf("Write(%d): got error: %v", i, err)
 		}
-		w.Close()
+		_ = w.Close()
 		if err := fs.SetMeta(fd); err != nil {
 			t.Fatalf("SetMeta(%d): got error: %v", i, err)
 		}
@@ -102,7 +102,7 @@ func TestFileStorage_MetaSetGet(t *testing.T) {
 			t.Fatalf("Invalid meta (%d): got '%s', want '%s'", i, rfd, fd)
 		}
 	}
-	os.RemoveAll(temp)
+	_ = os.RemoveAll(temp)
 }
 
 func TestFileStorage_Meta(t *testing.T) {
@@ -241,7 +241,7 @@ func TestFileStorage_Meta(t *testing.T) {
 			if cur.corrupt {
 				content = content[:len(content)-1-rand.Intn(3)]
 			}
-			if err := ioutil.WriteFile(filepath.Join(temp, curName), []byte(content), 0644); err != nil {
+			if err := os.WriteFile(filepath.Join(temp, curName), []byte(content), 0644); err != nil {
 				t.Fatal(err)
 			}
 			if cur.manifest {
@@ -252,19 +252,20 @@ func TestFileStorage_Meta(t *testing.T) {
 				if _, err := w.Write([]byte("TEST")); err != nil {
 					t.Fatal(err)
 				}
-				w.Close()
+				_ = w.Close()
 			}
 		}
 		ret, err := fs.GetMeta()
-		if tc.notExist {
-			if err != os.ErrNotExist {
+		switch {
+		case tc.notExist:
+			if !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("expect ErrNotExist, got: %v", err)
 			}
-		} else if tc.corrupt {
+		case tc.corrupt:
 			if !isCorrupted(err) {
 				t.Fatalf("expect ErrCorrupted, got: %v", err)
 			}
-		} else {
+		default:
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,7 +275,7 @@ func TestFileStorage_Meta(t *testing.T) {
 			if ret.Num != tc.expect {
 				t.Fatalf("invalid num, expect=%d got=%d", tc.expect, ret.Num)
 			}
-			fis, err := ioutil.ReadDir(temp)
+			fis, err := os.ReadDir(temp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -289,7 +290,7 @@ func TestFileStorage_Meta(t *testing.T) {
 				t.Logf("-> %s", fi.Name())
 			}
 		}
-		os.RemoveAll(temp)
+		_ = os.RemoveAll(temp)
 	}
 }
 
@@ -321,7 +322,7 @@ func TestFileStorage_InvalidFileName(t *testing.T) {
 
 func TestFileStorage_Locking(t *testing.T) {
 	temp := tempDir(t)
-	defer os.RemoveAll(temp)
+	defer func() { _ = os.RemoveAll(temp) }()
 
 	p1, err := OpenFile(temp, false)
 	if err != nil {
@@ -332,18 +333,18 @@ func TestFileStorage_Locking(t *testing.T) {
 	if err != nil {
 		t.Logf("OpenFile(2): got error: %s (expected)", err)
 	} else {
-		p2.Close()
-		p1.Close()
+		_ = p2.Close()
+		_ = p1.Close()
 		t.Fatal("OpenFile(2): expect error")
 	}
 
-	p1.Close()
+	_ = p1.Close()
 
 	p3, err := OpenFile(temp, false)
 	if err != nil {
 		t.Fatal("OpenFile(3): got error: ", err)
 	}
-	defer p3.Close()
+	defer func() { _ = p3.Close() }()
 
 	l, err := p3.Lock()
 	if err != nil {
@@ -364,7 +365,7 @@ func TestFileStorage_Locking(t *testing.T) {
 
 func TestFileStorage_ReadOnlyLocking(t *testing.T) {
 	temp := tempDir(t)
-	defer os.RemoveAll(temp)
+	defer func() { _ = os.RemoveAll(temp) }()
 
 	p1, err := OpenFile(temp, false)
 	if err != nil {
@@ -378,7 +379,7 @@ func TestFileStorage_ReadOnlyLocking(t *testing.T) {
 		t.Fatal("OpenFile(2): expect error")
 	}
 
-	p1.Close()
+	_ = p1.Close()
 
 	p3, err := OpenFile(temp, true)
 	if err != nil {
@@ -397,6 +398,6 @@ func TestFileStorage_ReadOnlyLocking(t *testing.T) {
 		t.Fatal("OpenFile(2): expect error")
 	}
 
-	p3.Close()
-	p4.Close()
+	_ = p3.Close()
+	_ = p4.Close()
 }

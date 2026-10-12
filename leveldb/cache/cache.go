@@ -167,13 +167,13 @@ func (b *mBucket) get(r *Cache, h *mHead, hash uint32, ns, key uint64, getOnly b
 		nh := &mHead{
 			buckets:         make([]mBucket, nhLen),
 			mask:            uint32(nhLen) - 1,
-			predecessor:     unsafe.Pointer(h),
+			predecessor:     unsafe.Pointer(h), //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 			growThreshold:   int64(nhLen * mOverflowThreshold),
 			shrinkThreshold: int64(nhLen >> 1),
 		}
 		// Callers hold r.mu, so the swap cannot fail; if it ever does,
 		// skip growing instead of panicking.
-		if atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh)) {
+		if atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh)) { //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 			atomic.AddInt32(&r.statGrow, 1)
 			go nh.initBuckets()
 		}
@@ -182,7 +182,7 @@ func (b *mBucket) get(r *Cache, h *mHead, hash uint32, ns, key uint64, getOnly b
 	return true, true, n
 }
 
-func (b *mBucket) delete(r *Cache, h *mHead, hash uint32, ns, key uint64) (done, deleted bool) {
+func (b *mBucket) delete(r *Cache, h *mHead, ns, key uint64) (done, deleted bool) {
 	b.mu.Lock()
 
 	if b.frozen() {
@@ -237,11 +237,11 @@ func (b *mBucket) delete(r *Cache, h *mHead, hash uint32, ns, key uint64) (done,
 			nh := &mHead{
 				buckets:         make([]mBucket, nhLen),
 				mask:            uint32(nhLen) - 1,
-				predecessor:     unsafe.Pointer(h),
+				predecessor:     unsafe.Pointer(h), //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 				growThreshold:   int64(nhLen * mOverflowThreshold),
 				shrinkThreshold: int64(nhLen >> 1),
 			}
-			if atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh)) {
+			if atomic.CompareAndSwapPointer(&r.mHead, unsafe.Pointer(h), unsafe.Pointer(nh)) { //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 				atomic.AddInt32(&r.statShrink, 1)
 				go nh.initBuckets()
 			}
@@ -343,6 +343,7 @@ func (h *mHead) enumerateNodesByNS(ns uint64) []*Node {
 	return nodes
 }
 
+// Stats are counters describing a Cache.
 type Stats struct {
 	Buckets     int
 	Nodes       int64
@@ -385,7 +386,7 @@ func NewCache(cacher Cacher) *Cache {
 		h.buckets[i].state = bucketInitialized
 	}
 	r := &Cache{
-		mHead:  unsafe.Pointer(h),
+		mHead:  unsafe.Pointer(h), //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 		cacher: cacher,
 	}
 	return r
@@ -410,7 +411,7 @@ func (r *Cache) enumerateNodesByNS(ns uint64) []*Node {
 func (r *Cache) delete(n *Node) bool {
 	for {
 		h, b := r.getBucket(n.hash)
-		done, deleted := b.delete(r, h, n.hash, n.ns, n.key)
+		done, deleted := b.delete(r, h, n.ns, n.key)
 		if done {
 			return deleted
 		}
@@ -514,7 +515,7 @@ func (r *Cache) Get(ns, key uint64, setFunc func() (size int, value Value)) *Han
 				if r.cacher != nil {
 					r.cacher.Promote(n)
 				}
-				return &Handle{unsafe.Pointer(n)}
+				return &Handle{unsafe.Pointer(n)} //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 			}
 
 			break
@@ -721,7 +722,7 @@ func (n *Node) Ref() int32 {
 func (n *Node) GetHandle() *Handle {
 	// Upstream panicked if the node had no references (an internal bug).
 	atomic.AddInt32(&n.ref, 1)
-	return &Handle{unsafe.Pointer(n)}
+	return &Handle{unsafe.Pointer(n)} //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 }
 
 func (n *Node) callFinalizer() {

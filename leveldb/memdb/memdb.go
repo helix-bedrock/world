@@ -9,7 +9,6 @@ package memdb
 
 import (
 	"math/rand"
-	"reflect"
 	"sync"
 	"unsafe"
 
@@ -212,11 +211,9 @@ func (p *DB) randHeight() (h int) {
 
 // kvSlice converts &nodeData[offset] to byte slice for kv.
 func (p *DB) kvSlice(offset int) (s []byte) {
-	sh := (*reflect.SliceHeader)(unsafe.Pointer(&s))
-	sh.Data = uintptr(unsafe.Pointer(&p.nodeData[offset]))
-	sh.Len = (len(p.nodeData) - offset) * intSize
-	sh.Cap = (cap(p.nodeData) - offset) * intSize
-	return
+	// nodeData is reused as raw bytes; offset is always < len(nodeData).
+	base := (*byte)(unsafe.Pointer(&p.nodeData[offset]))                                           //nolint:gosec // reviewed: views nodeData's own memory as bytes
+	return unsafe.Slice(base, (cap(p.nodeData)-offset)*intSize)[:(len(p.nodeData)-offset)*intSize] //nolint:gosec // reviewed: same memory, length and capacity as nodeData
 }
 
 // Must hold RW-lock if prev == true, as it use shared prevNode slice.
@@ -470,7 +467,7 @@ func (p *DB) Len() int {
 // Reset resets the DB to initial empty state. Allows reuse the buffer.
 func (p *DB) Reset() {
 	p.mu.Lock()
-	p.rnd = rand.New(rand.NewSource(0xdeadbeef))
+	p.rnd = rand.New(rand.NewSource(0xdeadbeef)) //nolint:gosec // not security sensitive: skiplist heights and read sampling
 	p.maxHeight = 1
 	p.n = 0
 	p.kvSize = 0
@@ -501,7 +498,7 @@ func New(cmp comparer.BasicComparer, capacity int) *DB {
 	p := &DB{
 		cmp:       cmp,
 		cap:       capacity,
-		rnd:       rand.New(rand.NewSource(0xdeadbeef)),
+		rnd:       rand.New(rand.NewSource(0xdeadbeef)), //nolint:gosec // not security sensitive: skiplist heights and read sampling
 		maxHeight: 1,
 		nodeData:  make([]int, 4+tMaxHeight, 4+tMaxHeight+prealloc),
 	}

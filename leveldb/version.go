@@ -7,6 +7,7 @@
 package leveldb
 
 import (
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -181,9 +182,9 @@ func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue
 			fikey, fval, ferr = v.s.tops.find(t, ikey, ro)
 		}
 
-		switch ferr {
-		case nil:
-		case ErrNotFound:
+		switch {
+		case ferr == nil:
+		case errors.Is(ferr, ErrNotFound):
 			return true
 		default:
 			err = ferr
@@ -231,7 +232,7 @@ func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue
 	})
 
 	if tseek && tset.table.consumeSeek() <= 0 {
-		tcomp = atomic.CompareAndSwapPointer(&v.cSeek, nil, unsafe.Pointer(tset))
+		tcomp = atomic.CompareAndSwapPointer(&v.cSeek, nil, unsafe.Pointer(tset)) //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 	}
 
 	return
@@ -246,7 +247,7 @@ func (v *version) sampleSeek(ikey internalKey) (tcomp bool) {
 			return true
 		}
 		if tset.table.consumeSeek() <= 0 {
-			tcomp = atomic.CompareAndSwapPointer(&v.cSeek, nil, unsafe.Pointer(tset))
+			tcomp = atomic.CompareAndSwapPointer(&v.cSeek, nil, unsafe.Pointer(tset)) //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 		}
 		return false
 	}, nil)
@@ -297,19 +298,21 @@ func (v *version) tLen(level int) int {
 
 func (v *version) offsetOf(ikey internalKey) (n int64, err error) {
 	for level, tables := range v.levels {
+	tables:
 		for _, t := range tables {
-			if v.s.icmp.Compare(t.imax, ikey) <= 0 {
+			switch {
+			case v.s.icmp.Compare(t.imax, ikey) <= 0:
 				// Entire file is before "ikey", so just add the file size
 				n += t.size
-			} else if v.s.icmp.Compare(t.imin, ikey) > 0 {
+			case v.s.icmp.Compare(t.imin, ikey) > 0:
 				// Entire file is after "ikey", so ignore
 				if level > 0 {
 					// Files other than level 0 are sorted by meta->min, so
 					// no further files in this level will contain data for
 					// "ikey".
-					break
+					break tables
 				}
-			} else {
+			default:
 				// "ikey" falls in the range for this table. Add the
 				// approximate offset of "ikey" within the table.
 				if m, err := v.s.tops.offsetOf(t, ikey); err == nil {

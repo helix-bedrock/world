@@ -206,24 +206,26 @@ func (tf tFiles) getOverlaps(dst tFiles, icmp *iComparer, umin, umax []byte, ove
 		// Determine the begin index of the overlapped file
 		if umin != nil {
 			index := tf.searchMinUkey(icmp, umin)
-			if index == 0 {
+			switch {
+			case index == 0:
 				begin = 0
-			} else if bytes.Compare(tf[index-1].imax.ukey(), umin) >= 0 {
+			case bytes.Compare(tf[index-1].imax.ukey(), umin) >= 0:
 				// The min ukey overlaps with the index-1 file, expand it.
 				begin = index - 1
-			} else {
+			default:
 				begin = index
 			}
 		}
 		// Determine the end index of the overlapped file
 		if umax != nil {
 			index := tf.searchMaxUkey(icmp, umax)
-			if index == len(tf) {
+			switch {
+			case index == len(tf):
 				end = len(tf)
-			} else if bytes.Compare(tf[index].imin.ukey(), umax) <= 0 {
+			case bytes.Compare(tf[index].imin.ukey(), umax) <= 0:
 				// The max ukey overlaps with the index file, expand it.
 				end = index + 1
-			} else {
+			default:
 				end = index
 			}
 		} else {
@@ -383,7 +385,7 @@ func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 	defer func() {
 		if err != nil {
 			if derr := w.drop(); derr != nil {
-				err = fmt.Errorf("error createFrom (%v); error dropping (%v)", err, derr)
+				err = fmt.Errorf("error createFrom (%w); error dropping (%w)", err, derr)
 			}
 		}
 	}()
@@ -576,7 +578,7 @@ func (w *tWriter) finish() (f *tFile, err error) {
 			if err == nil {
 				err = cerr
 			} else {
-				err = fmt.Errorf("error opening file (%v); error unlocking file (%v)", err, cerr)
+				err = fmt.Errorf("error opening file (%w); error unlocking file (%w)", err, cerr)
 			}
 		}
 	}()

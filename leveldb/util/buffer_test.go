@@ -6,6 +6,7 @@ package util
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"math/rand"
 	"runtime"
@@ -279,7 +280,7 @@ func TestReadBytes(t *testing.T) {
 				break
 			}
 		}
-		if err != test.err {
+		if !errors.Is(err, test.err) {
 			t.Errorf("expected error %v, got %v", test.err, err)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"errors"
 )
 
+// Errors returned by Releasers.
 var (
 	ErrReleased    = errors.New("leveldb: resource already relesed")
 	ErrHasReleaser = errors.New("leveldb: releaser already defined")
@@ -70,6 +71,8 @@ func (r *BasicReleaser) SetReleaser(releaser Releaser) {
 	r.releaser = releaser
 }
 
+// NoopReleaser is a Releaser that does nothing.
 type NoopReleaser struct{}
 
+// Release does nothing.
 func (NoopReleaser) Release() {}

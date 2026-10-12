@@ -356,7 +356,7 @@ func (h *indexHeap) FixTopWith(x int) {
 	h.down(0, len(h.indexes))
 }
 
-func (h *indexHeap) down(i0, n int) bool {
+func (h *indexHeap) down(i0, n int) {
 	i := i0
 	for {
 		j1 := 2*i + 1
@@ -373,7 +373,6 @@ func (h *indexHeap) down(i0, n int) bool {
 		h.swap(i, j)
 		i = j
 	}
-	return i > i0
 }
 
 func (h *indexHeap) less(i, j int) bool {

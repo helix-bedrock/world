@@ -53,7 +53,7 @@ func newFileLock(path string, readOnly bool) (fl fileLock, err error) {
 }
 
 func moveFileEx(from *uint16, to *uint16, flags uint32) error {
-	r1, _, e1 := syscall.Syscall(procMoveFileExW.Addr(), 3, uintptr(unsafe.Pointer(from)), uintptr(unsafe.Pointer(to)), uintptr(flags))
+	r1, _, e1 := syscall.SyscallN(procMoveFileExW.Addr(), uintptr(unsafe.Pointer(from)), uintptr(unsafe.Pointer(to)), uintptr(flags)) //nolint:gosec // reviewed: passes UTF-16 path pointers to MoveFileExW
 	if r1 == 0 {
 		if e1 != 0 {
 			return error(e1)

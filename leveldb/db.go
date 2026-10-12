@@ -137,8 +137,8 @@ func openDB(s *session) (*DB, error) {
 		if err := db.checkAndCleanFiles(); err != nil {
 			// Close journal.
 			if db.journal != nil {
-				db.journal.Close()
-				db.journalWriter.Close()
+				_ = db.journal.Close()
+				_ = db.journalWriter.Close()
 			}
 			return nil, err
 		}
@@ -226,7 +226,7 @@ func OpenFile(path string, o *opt.Options) (db *DB, err error) {
 	}
 	db, err = Open(stor, o)
 	if err != nil {
-		stor.Close()
+		_ = stor.Close()
 	} else {
 		db.closer = stor
 	}
@@ -276,7 +276,7 @@ func RecoverFile(path string, o *opt.Options) (db *DB, err error) {
 	}
 	db, err = Recover(stor, o)
 	if err != nil {
-		stor.Close()
+		_ = stor.Close()
 	} else {
 		db.closer = stor
 	}
@@ -317,12 +317,12 @@ func recoverTable(s *session, o *opt.Options) error {
 				if err == nil {
 					err = cerr
 				} else {
-					err = fmt.Errorf("error recovering table (%v); error closing (%v)", err, cerr)
+					err = fmt.Errorf("error recovering table (%w); error closing (%w)", err, cerr)
 				}
 			}
 			if err != nil {
 				if rerr := s.stor.Remove(tmpFd); rerr != nil {
-					err = fmt.Errorf("error recovering table (%v); error removing (%v)", err, rerr)
+					err = fmt.Errorf("error recovering table (%w); error removing (%w)", err, rerr)
 				}
 				tmpFd = storage.FileDesc{}
 			}
@@ -365,7 +365,7 @@ func recoverTable(s *session, o *opt.Options) error {
 		var closed bool
 		defer func() {
 			if !closed {
-				reader.Close()
+				_ = reader.Close()
 			}
 		}()
 
@@ -438,7 +438,7 @@ func recoverTable(s *session, o *opt.Options) error {
 					return err
 				}
 				closed = true
-				reader.Close()
+				_ = reader.Close()
 				if err := s.stor.Rename(tmpFd, fd); err != nil {
 					return err
 				}
@@ -548,7 +548,7 @@ func (db *DB) recoverJournal() error {
 			if !ofd.Zero() {
 				if mdb.Len() > 0 {
 					if _, err := db.s.flushMemdb(rec, mdb, 0); err != nil {
-						fr.Close()
+						_ = fr.Close()
 						return err
 					}
 				}
@@ -556,13 +556,13 @@ func (db *DB) recoverJournal() error {
 				rec.setJournalNum(fd.Num)
 				rec.setSeqNum(db.seq)
 				if err := db.s.commit(rec, false); err != nil {
-					fr.Close()
+					_ = fr.Close()
 					return err
 				}
 				rec.resetAddedTables()
 
 				if err := db.s.stor.Remove(ofd); err != nil {
-					fr.Close()
+					_ = fr.Close()
 					return err
 				}
 				ofd = storage.FileDesc{}
@@ -573,22 +573,22 @@ func (db *DB) recoverJournal() error {
 			for {
 				r, err := jr.Next()
 				if err != nil {
-					if err == io.EOF {
+					if errors.Is(err, io.EOF) {
 						break
 					}
 
-					fr.Close()
+					_ = fr.Close()
 					return errors.SetFd(err, fd)
 				}
 
 				buf.Reset()
 				if _, err := buf.ReadFrom(r); err != nil {
-					if err == io.ErrUnexpectedEOF {
+					if errors.Is(err, io.ErrUnexpectedEOF) {
 						// This is error returned due to corruption, with strict == false.
 						continue
 					}
 
-					fr.Close()
+					_ = fr.Close()
 					return errors.SetFd(err, fd)
 				}
 				batchSeq, batchLen, err = decodeBatchToMem(buf.Bytes(), mdb)
@@ -599,7 +599,7 @@ func (db *DB) recoverJournal() error {
 						continue
 					}
 
-					fr.Close()
+					_ = fr.Close()
 					return errors.SetFd(err, fd)
 				}
 
@@ -614,7 +614,7 @@ func (db *DB) recoverJournal() error {
 				// Flush it if large enough.
 				if mdb.Size() >= writeBuffer {
 					if _, err := db.s.flushMemdb(rec, mdb, 0); err != nil {
-						fr.Close()
+						_ = fr.Close()
 						return err
 					}
 
@@ -622,7 +622,7 @@ func (db *DB) recoverJournal() error {
 				}
 			}
 
-			fr.Close()
+			_ = fr.Close()
 			ofd = fd
 		}
 
@@ -645,8 +645,8 @@ func (db *DB) recoverJournal() error {
 	if err := db.s.commit(rec, false); err != nil {
 		// Close journal on error.
 		if db.journal != nil {
-			db.journal.Close()
-			db.journalWriter.Close()
+			_ = db.journal.Close()
+			_ = db.journalWriter.Close()
 		}
 		return err
 	}
@@ -718,22 +718,22 @@ func (db *DB) recoverJournalRO() error {
 			for {
 				r, err := jr.Next()
 				if err != nil {
-					if err == io.EOF {
+					if errors.Is(err, io.EOF) {
 						break
 					}
 
-					fr.Close()
+					_ = fr.Close()
 					return errors.SetFd(err, fd)
 				}
 
 				buf.Reset()
 				if _, err := buf.ReadFrom(r); err != nil {
-					if err == io.ErrUnexpectedEOF {
+					if errors.Is(err, io.ErrUnexpectedEOF) {
 						// This is error returned due to corruption, with strict == false.
 						continue
 					}
 
-					fr.Close()
+					_ = fr.Close()
 					return errors.SetFd(err, fd)
 				}
 				batchSeq, batchLen, err = decodeBatchToMem(buf.Bytes(), mdb)
@@ -744,7 +744,7 @@ func (db *DB) recoverJournalRO() error {
 						continue
 					}
 
-					fr.Close()
+					_ = fr.Close()
 					return errors.SetFd(err, fd)
 				}
 
@@ -757,7 +757,7 @@ func (db *DB) recoverJournalRO() error {
 				}
 			}
 
-			fr.Close()
+			_ = fr.Close()
 		}
 	}
 
@@ -781,7 +781,7 @@ func memGet(mdb *memdb.DB, ikey internalKey, icmp *iComparer) (ok bool, mv []byt
 			return true, mv, nil
 
 		}
-	} else if err != ErrNotFound {
+	} else if !errors.Is(err, ErrNotFound) {
 		return true, nil, err
 	}
 	return
@@ -819,7 +819,7 @@ func (db *DB) get(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.R
 }
 
 func nilIfNotFound(err error) error {
-	if err == ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
 	return err
@@ -855,7 +855,7 @@ func (db *DB) has(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.R
 	}
 	if err == nil {
 		ret = true
-	} else if err == ErrNotFound {
+	} else if errors.Is(err, ErrNotFound) {
 		err = nil
 	}
 	return
@@ -1192,7 +1192,7 @@ func (db *DB) Close() error {
 	var err error
 	select {
 	case err = <-db.compErrC:
-		if err == ErrReadOnly {
+		if errors.Is(err, ErrReadOnly) {
 			err = nil
 		}
 	default:
@@ -1212,10 +1212,15 @@ func (db *DB) Close() error {
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
 
-	// Closes journal.
+	// Closes journal. Its errors are returned: the last records may not be
+	// on disk if they fail.
 	if db.journal != nil {
-		db.journal.Close()
-		db.journalWriter.Close()
+		if jerr := db.journal.Close(); err == nil {
+			err = jerr
+		}
+		if jerr := db.journalWriter.Close(); err == nil {
+			err = jerr
+		}
 		db.journal = nil
 		db.journalWriter = nil
 	}

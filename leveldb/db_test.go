@@ -89,7 +89,7 @@ func (h *dbHarness) init(t *testing.T, o *opt.Options) {
 
 	if err := h.openDB0(); err != nil {
 		// So that it will come after fatal message.
-		defer h.stor.Close()
+		defer func() { _ = h.stor.Close() }()
 		h.t.Fatal("Open (init): got error: ", err)
 	}
 }
@@ -113,7 +113,7 @@ func (h *dbHarness) closeDB0() error {
 
 func (h *dbHarness) closeDB() {
 	if h.db != nil {
-		if err := h.closeDB0(); err != nil && err != ErrClosed {
+		if err := h.closeDB0(); err != nil && !errors.Is(err, ErrClosed) {
 			h.t.Error("Close: got error: ", err)
 		}
 	}
@@ -130,12 +130,12 @@ func (h *dbHarness) reopenDB() {
 
 func (h *dbHarness) close() {
 	if h.db != nil {
-		if err := h.closeDB0(); err != nil && err != ErrClosed {
+		if err := h.closeDB0(); err != nil && !errors.Is(err, ErrClosed) {
 			h.t.Error("Close: got error: ", err)
 		}
 		h.db = nil
 	}
-	h.stor.Close()
+	_ = h.stor.Close()
 	h.stor = nil
 	runtime.GC()
 }
@@ -152,7 +152,7 @@ func (h *dbHarness) openAssert(want bool) {
 		if !want {
 			h.t.Error("Open: assert: expect error")
 		}
-		db.Close()
+		_ = db.Close()
 	}
 }
 
@@ -236,12 +236,12 @@ func (h *dbHarness) assertNumKeys(want int) {
 func (h *dbHarness) getr(db Reader, key string, expectFound bool) (found bool, v []byte) {
 	t := h.t
 	v, err := db.Get([]byte(key), h.ro)
-	switch err {
-	case ErrNotFound:
+	switch {
+	case errors.Is(err, ErrNotFound):
 		if expectFound {
 			t.Errorf("Get: key '%s' not found, want found", key)
 		}
-	case nil:
+	case err == nil:
 		found = true
 		if !expectFound {
 			t.Errorf("Get: key '%s' found, want not found", key)
@@ -570,7 +570,7 @@ func Test_FieldsAligned(t *testing.T) {
 
 func TestDB_Locking(t *testing.T) {
 	h := newDbHarness(t)
-	defer h.stor.Close()
+	defer func() { _ = h.stor.Close() }()
 	h.openAssert(false)
 	h.closeDB()
 	h.openAssert(true)
@@ -1353,7 +1353,7 @@ func TestDB_CompactionTableOpenError(t *testing.T) {
 
 	h.stor.EmulateError(testutil.ModeOpen, storage.TypeTable, errors.New("open error during table compaction"))
 	go func() {
-		if err := h.db.CompactRange(util.Range{}); err != nil && err != ErrClosed {
+		if err := h.db.CompactRange(util.Range{}); err != nil && !errors.Is(err, ErrClosed) {
 			t.Error("CompactRange error: ", err)
 		}
 	}()
@@ -1507,7 +1507,7 @@ func TestDB_ManifestWriteError(t *testing.T) {
 			// Merging compaction (will fail)
 			h.compactRangeAtErr(0, "", "", true)
 
-			h.db.Close()
+			_ = h.db.Close()
 			h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, nil)
 			h.stor.EmulateError(testutil.ModeSync, storage.TypeManifest, nil)
 
@@ -1610,7 +1610,7 @@ func TestDB_ClosedIsClosed(t *testing.T) {
 type numberComparer struct{}
 
 func (numberComparer) num(x []byte) (n int) {
-	fmt.Sscan(string(x[1:len(x)-1]), &n)
+	_, _ = fmt.Sscan(string(x[1:len(x)-1]), &n)
 	return
 }
 
@@ -1784,7 +1784,7 @@ func TestDB_Concurrent(t *testing.T) {
 					if err == nil {
 						found++
 						rk, ri, rx := 0, -1, uint32(0)
-						fmt.Sscanf(string(v), "%d.%d.%d", &rk, &ri, &rx)
+						_, _ = fmt.Sscanf(string(v), "%d.%d.%d", &rk, &ri, &rx)
 						if rk != k {
 							t.Errorf("invalid key want=%d got=%d", k, rk)
 						}
@@ -1796,7 +1796,7 @@ func TestDB_Concurrent(t *testing.T) {
 								t.Errorf("invalid seq number, %d > %d ", rx, tx)
 							}
 						}
-					} else if err != ErrNotFound {
+					} else if !errors.Is(err, ErrNotFound) {
 						t.Error("Get: got error: ", err)
 						return
 					}
@@ -1930,7 +1930,7 @@ func TestDB_CreateReopenDbOnFile(t *testing.T) {
 	if err := os.RemoveAll(dbpath); err != nil {
 		t.Fatal("cannot remove old db: ", err)
 	}
-	defer os.RemoveAll(dbpath)
+	defer func() { _ = os.RemoveAll(dbpath) }()
 
 	for i := 0; i < 3; i++ {
 		stor, err := storage.OpenFile(dbpath, false)
@@ -1958,7 +1958,7 @@ func TestDB_CreateReopenDbOnFile2(t *testing.T) {
 	if err := os.RemoveAll(dbpath); err != nil {
 		t.Fatal("cannot remove old db: ", err)
 	}
-	defer os.RemoveAll(dbpath)
+	defer func() { _ = os.RemoveAll(dbpath) }()
 
 	for i := 0; i < 3; i++ {
 		db, err := OpenFile(dbpath, nil)
@@ -2585,7 +2585,7 @@ func TestDB_TableCompactionBuilder(t *testing.T) {
 	stor := testutil.NewStorage()
 	stor.OnLog(testingLogger(t))
 	stor.OnClose(testingPreserveOnFailed(t))
-	defer stor.Close()
+	defer func() { _ = stor.Close() }()
 
 	const nSeq = 99
 
@@ -2870,7 +2870,7 @@ func TestDB_ReadOnly(t *testing.T) {
 	h.stor.EmulateError(mode, storage.TypeAll, errors.New("read-only DB shouldn't writes"))
 
 	ro := func(key, value, wantValue string) {
-		if err := h.db.Put([]byte(key), []byte(value), h.wo); err != ErrReadOnly {
+		if err := h.db.Put([]byte(key), []byte(value), h.wo); !errors.Is(err, ErrReadOnly) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		h.getVal(key, wantValue)

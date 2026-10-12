@@ -205,11 +205,12 @@ func (p *sessionRecord) readUvarintMayEOF(field string, r io.ByteReader, mayEOF 
 	}
 	x, err := binary.ReadUvarint(r)
 	if err != nil {
-		if err == io.ErrUnexpectedEOF || (!mayEOF && err == io.EOF) {
+		switch {
+		case errors.Is(err, io.ErrUnexpectedEOF) || (!mayEOF && errors.Is(err, io.EOF)):
 			p.err = errors.NewErrCorrupted(storage.FileDesc{}, &ErrManifestCorrupted{field, "short read"})
-		} else if strings.HasPrefix(err.Error(), "binary:") {
+		case strings.HasPrefix(err.Error(), "binary:"):
 			p.err = errors.NewErrCorrupted(storage.FileDesc{}, &ErrManifestCorrupted{field, err.Error()})
-		} else {
+		default:
 			p.err = err
 		}
 		return 0
@@ -240,7 +241,7 @@ func (p *sessionRecord) readBytes(field string, r byteReader) []byte {
 	x := make([]byte, n)
 	_, p.err = io.ReadFull(r, x)
 	if p.err != nil {
-		if p.err == io.ErrUnexpectedEOF {
+		if errors.Is(p.err, io.ErrUnexpectedEOF) {
 			p.err = errors.NewErrCorrupted(storage.FileDesc{}, &ErrManifestCorrupted{field, "short read"})
 		}
 		return nil
@@ -268,7 +269,7 @@ func (p *sessionRecord) decode(r io.Reader) error {
 	for p.err == nil {
 		rec := p.readUvarintMayEOF("field-header", br, true)
 		if p.err != nil {
-			if p.err == io.EOF {
+			if errors.Is(p.err, io.EOF) {
 				return nil
 			}
 			return p.err

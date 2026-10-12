@@ -13,7 +13,7 @@ import (
 
 // IteratorIndexer is the interface that wraps CommonIterator and basic Get
 // method. IteratorIndexer provides index for indexed iterator.
-type IteratorIndexer interface {
+type IteratorIndexer interface { //nolint:revive // keeps goleveldb's API name
 	CommonIterator
 
 	// Get returns a new data iterator for the current position, or nil if

@@ -18,8 +18,6 @@ import (
 	"github.com/helix-bedrock/world/leveldb/storage"
 )
 
-var ()
-
 type cStat struct {
 	duration time.Duration
 	read     int64
@@ -92,7 +90,7 @@ noerr:
 		case err = <-db.compErrSetC:
 			switch {
 			case err == nil:
-			case err == ErrReadOnly, errors.IsCorrupted(err):
+			case errors.Is(err, ErrReadOnly), errors.IsCorrupted(err):
 				goto hasperr
 			default:
 				goto haserr
@@ -110,7 +108,7 @@ haserr:
 			switch {
 			case err == nil:
 				goto noerr
-			case err == ErrReadOnly, errors.IsCorrupted(err):
+			case errors.Is(err, ErrReadOnly), errors.IsCorrupted(err):
 				goto hasperr
 			default:
 			}
@@ -445,7 +443,7 @@ func (b *tableCompactionBuilder) run(cnt *compactionTransactCounter) (err error)
 			if err == nil {
 				err = cerr
 			} else {
-				err = fmt.Errorf("tableCompactionBuilder error: %v, cleanup error (%v)", err, cerr)
+				err = fmt.Errorf("tableCompactionBuilder error: %w, cleanup error (%w)", err, cerr)
 			}
 		}
 	}()
@@ -617,7 +615,7 @@ func (db *DB) tableCompaction(c *compaction, noTrivial bool) {
 	}
 }
 
-func (db *DB) tableRangeCompaction(level int, umin, umax []byte) error {
+func (db *DB) tableRangeCompaction(level int, umin, umax []byte) {
 	db.logf("table@compaction range L%d %q:%q", level, umin, umax)
 	if level >= 0 {
 		if c := db.s.getCompactionRange(level, umin, umax, true); c != nil {
@@ -651,8 +649,6 @@ func (db *DB) tableRangeCompaction(level int, umin, umax []byte) error {
 			}
 		}
 	}
-
-	return nil
 }
 
 func (db *DB) tableAutoCompaction() {
@@ -860,7 +856,8 @@ func (db *DB) tCompaction() {
 					}
 				}
 			case cRange:
-				x.ack(db.tableRangeCompaction(cmd.level, cmd.min, cmd.max))
+				db.tableRangeCompaction(cmd.level, cmd.min, cmd.max)
+				x.ack(nil)
 			default:
 				db.logf("table@compaction unknown command %T", x)
 			}

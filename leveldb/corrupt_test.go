@@ -143,7 +143,7 @@ func (h *dbCorruptHarness) corrupt(ft storage.FileType, fi, offset, n int) {
 	if err != nil {
 		t.Fatal("cannot read file: ", err)
 	}
-	r.Close()
+	_ = r.Close()
 
 	for i := 0; i < n; i++ {
 		buf[offset+i] ^= 0x80
@@ -161,7 +161,7 @@ func (h *dbCorruptHarness) corrupt(ft storage.FileType, fi, offset, n int) {
 	if err != nil {
 		t.Fatal("cannot write new file: ", err)
 	}
-	w.Close()
+	_ = w.Close()
 }
 
 func (h *dbCorruptHarness) forceRemoveAll(ft storage.FileType) {
@@ -197,7 +197,7 @@ func (h *dbCorruptHarness) check(min, max int) {
 	iter := db.NewIterator(nil, p.ro)
 	for iter.Next() {
 		k := 0
-		fmt.Sscanf(string(iter.Key()), "%d", &k)
+		_, _ = fmt.Sscanf(string(iter.Key()), "%d", &k)
 		if k < n {
 			badk++
 			continue

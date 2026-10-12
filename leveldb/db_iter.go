@@ -91,7 +91,7 @@ func (db *DB) newIterator(auxm *memDB, auxt tFiles, seq uint64, slice *util.Rang
 }
 
 func (db *DB) iterSamplingRate() int {
-	return rand.Intn(2 * db.s.o.GetIteratorSamplingRate())
+	return rand.Intn(2 * db.s.o.GetIteratorSamplingRate()) //nolint:gosec // not security sensitive: skiplist heights and read sampling
 }
 
 type dir int

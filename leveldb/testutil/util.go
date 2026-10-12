@@ -23,6 +23,7 @@ var (
 	runmu sync.Mutex
 )
 
+// Defer registers a function to run in the named group, or the default group.
 func Defer(args ...interface{}) bool {
 	var (
 		group string
@@ -46,6 +47,7 @@ func Defer(args ...interface{}) bool {
 	return true
 }
 
+// RunDefer runs and clears the functions registered in groups.
 func RunDefer(groups ...string) bool {
 	if len(groups) == 0 {
 		groups = append(groups, "")
@@ -63,6 +65,7 @@ func RunDefer(groups ...string) bool {
 	return runfn_ != nil
 }
 
+// RandomSeed returns the seed used by NewRand.
 func RandomSeed() int64 {
 	if !flag.Parsed() {
 		panic("random seed not initialized")
@@ -70,12 +73,14 @@ func RandomSeed() int64 {
 	return config.GinkgoConfig.RandomSeed
 }
 
+// NewRand returns a random source seeded with RandomSeed.
 func NewRand() *rand.Rand {
 	return rand.New(rand.NewSource(RandomSeed()))
 }
 
 var cmp = comparer.DefaultComparer
 
+// BytesSeparator returns a key between a and b.
 func BytesSeparator(a, b []byte) []byte {
 	if bytes.Equal(a, b) {
 		return b
@@ -107,6 +112,7 @@ func BytesSeparator(a, b []byte) []byte {
 	return append(x, 'x')
 }
 
+// BytesAfter returns a key after b.
 func BytesAfter(b []byte) []byte {
 	var x []byte
 	for _, c := range b {
@@ -118,6 +124,7 @@ func BytesAfter(b []byte) []byte {
 	return append(x, 'x')
 }
 
+// RandomIndex calls f with up to round random indexes below n.
 func RandomIndex(rnd *rand.Rand, n, round int, fn func(i int)) {
 	if rnd == nil {
 		rnd = NewRand()
@@ -127,6 +134,7 @@ func RandomIndex(rnd *rand.Rand, n, round int, fn func(i int)) {
 	}
 }
 
+// ShuffledIndex calls f with up to round indexes below n in random order.
 func ShuffledIndex(rnd *rand.Rand, n, round int, fn func(i int)) {
 	if rnd == nil {
 		rnd = NewRand()
@@ -138,6 +146,7 @@ func ShuffledIndex(rnd *rand.Rand, n, round int, fn func(i int)) {
 	}
 }
 
+// RandomRange calls f with up to round random ranges inside n.
 func RandomRange(rnd *rand.Rand, n, round int, fn func(start, limit int)) {
 	if rnd == nil {
 		rnd = NewRand()
@@ -152,6 +161,7 @@ func RandomRange(rnd *rand.Rand, n, round int, fn func(start, limit int)) {
 	}
 }
 
+// Max returns the larger of x and y.
 func Max(x, y int) int {
 	if x > y {
 		return x
@@ -159,6 +169,7 @@ func Max(x, y int) int {
 	return y
 }
 
+// Min returns the smaller of x and y.
 func Min(x, y int) int {
 	if x < y {
 		return x

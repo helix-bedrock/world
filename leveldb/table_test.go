@@ -20,7 +20,7 @@ import (
 func TestGetOverlaps(t *testing.T) {
 	gomega.RegisterTestingT(t)
 	stor := testutil.NewStorage()
-	defer stor.Close()
+	defer func() { _ = stor.Close() }()
 	s, err := newSession(stor, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func BenchmarkGetOverlapNonLevel0(b *testing.B) {
 
 func benchmarkGetOverlap(b *testing.B, level int, size int) {
 	stor := storage.NewMemStorage()
-	defer stor.Close()
+	defer func() { _ = stor.Close() }()
 	s, err := newSession(stor, nil)
 	if err != nil {
 		b.Fatal(err)

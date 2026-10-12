@@ -56,12 +56,8 @@ type ErrCorrupted struct {
 }
 
 func isCorrupted(err error) bool {
-	switch err.(type) {
-	case *ErrCorrupted:
-		return true
-	default:
-		return false
-	}
+	var e *ErrCorrupted
+	return errors.As(err, &e)
 }
 
 func (e *ErrCorrupted) Error() string {

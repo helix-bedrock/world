@@ -65,14 +65,43 @@ type block struct {
 }
 
 func (b *block) seek(cmp comparer.Comparer, rstart, rlimit int, key []byte) (index, offset int, err error) {
+	// Restart points come from the file; a corrupt one must not index past
+	// the block.
+	corrupt := false
 	index = sort.Search(b.restartsLen-rstart-(b.restartsLen-rlimit), func(i int) bool {
+		if corrupt {
+			return false
+		}
 		offset := int(binary.LittleEndian.Uint32(b.data[b.restartsOffset+4*(rstart+i):]))
-		offset++                                    // shared always zero, since this is a restart point
-		v1, n1 := binary.Uvarint(b.data[offset:])   // key length
-		_, n2 := binary.Uvarint(b.data[offset+n1:]) // value length
+		if offset == b.restartsOffset {
+			// An empty block has one restart point and no entries.
+			return false
+		}
+		offset++ // shared always zero, since this is a restart point
+		if offset >= b.restartsOffset {
+			corrupt = true
+			return false
+		}
+		v1, n1 := binary.Uvarint(b.data[offset:b.restartsOffset]) // key length
+		if n1 <= 0 {
+			corrupt = true
+			return false
+		}
+		_, n2 := binary.Uvarint(b.data[offset+n1 : b.restartsOffset]) // value length
+		if n2 <= 0 {
+			corrupt = true
+			return false
+		}
 		m := offset + n1 + n2
+		if v1 > uint64(b.restartsOffset-m) {
+			corrupt = true
+			return false
+		}
 		return cmp.Compare(b.data[m:m+int(v1)], key) > 0
 	}) + rstart - 1
+	if corrupt {
+		return 0, 0, errors.New("leveldb/table: restart point out of range")
+	}
 	if index < rstart {
 		// The smallest key is greater-than key sought.
 		index = rstart
@@ -234,7 +263,7 @@ func (i *blockIter) Seek(key []byte) bool {
 
 	ri, offset, err := i.block.seek(i.tr.cmp, i.riStart, i.riLimit, key)
 	if err != nil {
-		i.sErr(err)
+		i.sErr(i.tr.newErrCorruptedBH(i.block.bh, err.Error()))
 		return false
 	}
 	i.restartIndex = ri
@@ -258,10 +287,11 @@ func (i *blockIter) Next() bool {
 		return false
 	}
 
-	if i.dir == dirSOI {
+	switch i.dir {
+	case dirSOI:
 		i.restartIndex = i.riStart
 		i.offset = i.offsetStart
-	} else if i.dir == dirBackward {
+	case dirBackward:
 		i.prevNode = i.prevNode[:0]
 		i.prevKeys = i.prevKeys[:0]
 	}
@@ -312,7 +342,8 @@ func (i *blockIter) Prev() bool {
 	}
 
 	var ri int
-	if i.dir == dirForward {
+	switch {
+	case i.dir == dirForward:
 		// Change direction.
 		i.offset = i.prevOffset
 		if i.offset == i.offsetRealStart {
@@ -321,7 +352,7 @@ func (i *blockIter) Prev() bool {
 		}
 		ri = i.block.restartIndex(i.restartIndex, i.riLimit, i.offset)
 		i.dir = dirBackward
-	} else if i.dir == dirEOI {
+	case i.dir == dirEOI:
 		// At the end of iterator.
 		i.restartIndex = i.riLimit
 		i.offset = i.offsetLimit
@@ -331,7 +362,7 @@ func (i *blockIter) Prev() bool {
 		}
 		ri = i.riLimit - 1
 		i.dir = dirBackward
-	} else if len(i.prevNode) == 1 {
+	case len(i.prevNode) == 1:
 		// This is the end of a restart range.
 		i.offset = i.prevNode[0]
 		i.prevNode = i.prevNode[:0]
@@ -341,7 +372,7 @@ func (i *blockIter) Prev() bool {
 		}
 		i.restartIndex--
 		ri = i.restartIndex
-	} else {
+	default:
 		// In the middle of restart range, get from cache.
 		n := len(i.prevNode) - 3
 		node := i.prevNode[n:]
@@ -506,7 +537,7 @@ func (i *indexIter) Get() iterator.Iterator {
 	}
 
 	var slice *util.Range
-	if i.slice != nil && (i.blockIter.isFirst() || i.blockIter.isLast()) {
+	if i.slice != nil && (i.isFirst() || i.isLast()) {
 		slice = i.slice
 	}
 	return i.tr.getDataIterErr(dataBH, slice, i.tr.verifyChecksum, i.fillCache)
@@ -620,7 +651,8 @@ func (r *Reader) newErrCorruptedBH(bh blockHandle, reason string) error {
 }
 
 func (r *Reader) fixErrCorruptedBH(bh blockHandle, err error) error {
-	if cerr, ok := err.(*ErrCorrupted); ok {
+	var cerr *ErrCorrupted
+	if errors.As(err, &cerr) {
 		cerr.Pos = int64(bh.offset)
 		cerr.Size = int64(bh.length)
 		cerr.Kind = r.blockKind(bh)
@@ -1079,7 +1111,7 @@ func (r *Reader) Release() {
 	defer r.mu.Unlock()
 
 	if closer, ok := r.reader.(io.Closer); ok {
-		closer.Close()
+		_ = closer.Close()
 	}
 	if r.indexBlock != nil {
 		r.indexBlock.Release()

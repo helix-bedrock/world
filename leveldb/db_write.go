@@ -7,6 +7,7 @@
 package leveldb
 
 import (
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -45,7 +46,7 @@ retry:
 	// Create new memdb and journal.
 	mem, err = db.newMem(n)
 	if err != nil {
-		if err == errHasFrozenMem {
+		if errors.Is(err, errHasFrozenMem) {
 			if retryLimit <= 0 {
 				return nil, err
 			}

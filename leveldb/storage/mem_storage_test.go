@@ -38,7 +38,7 @@ func TestMemStorage(t *testing.T) {
 	if _, err := w.Write([]byte("abc")); err != nil {
 		t.Fatal("Storage.Write: ", err)
 	}
-	w.Close()
+	_ = w.Close()
 	if fds, _ := m.List(TypeAll); len(fds) != 1 {
 		t.Fatal("invalid GetFiles len")
 	}
@@ -50,7 +50,7 @@ func TestMemStorage(t *testing.T) {
 	if _, err := buf.ReadFrom(r); err != nil {
 		t.Fatal("ReadFrom: got error: ", err)
 	}
-	r.Close()
+	_ = r.Close()
 	if got := buf.String(); got != "abc" {
 		t.Fatalf("Read: invalid value, want=abc got=%s", got)
 	}
@@ -81,14 +81,14 @@ func TestMemStorageRename(t *testing.T) {
 		t.Fatalf("Storage.Create: %v", err)
 	}
 
-	fmt.Fprintf(w, "abc")
-	w.Close()
+	_, _ = fmt.Fprintf(w, "abc")
+	_ = w.Close()
 
 	rd, err := m.Open(fd1)
 	if err != nil {
 		t.Fatalf("Storage.Open(%v): %v", fd1, err)
 	}
-	rd.Close()
+	_ = rd.Close()
 
 	fds, err := m.List(TypeAll)
 	if err != nil {
@@ -109,7 +109,7 @@ func TestMemStorageRename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Storage.Open(%v): %v", fd2, err)
 	}
-	rd.Close()
+	_ = rd.Close()
 
 	fds, err = m.List(TypeAll)
 	if err != nil {

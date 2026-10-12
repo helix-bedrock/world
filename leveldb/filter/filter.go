@@ -45,7 +45,7 @@ type Filter interface {
 }
 
 // FilterGenerator is the filter generator.
-type FilterGenerator interface {
+type FilterGenerator interface { //nolint:revive // keeps goleveldb's API name
 	// Add adds a key to the filter generator.
 	//
 	// The key may become invalid after call to this method end, therefor

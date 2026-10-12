@@ -108,7 +108,7 @@ func openDBBench(b *testing.B, noCompress bool) *dbBench {
 }
 
 func (p *dbBench) reopen() {
-	p.db.Close()
+	_ = p.db.Close()
 	var err error
 	p.db, err = Open(p.stor, p.o)
 	if err != nil {
@@ -252,9 +252,9 @@ func (p *dbBench) close() {
 	if bp, err := p.db.GetProperty("leveldb.blockpool"); err == nil {
 		p.b.Log("Block pool stats: ", bp)
 	}
-	p.db.Close()
-	p.stor.Close()
-	os.RemoveAll(benchDB)
+	_ = p.db.Close()
+	_ = p.stor.Close()
+	_ = os.RemoveAll(benchDB)
 	p.db = nil
 	p.keys = nil
 	p.values = nil
@@ -497,10 +497,8 @@ func BenchmarkDBReadConcurrent2(b *testing.B) {
 		if atomic.AddUint32(&dir, 1)%2 == 0 {
 			for pb.Next() && iter.Next() {
 			}
-		} else {
-			if pb.Next() && iter.Last() {
-				for pb.Next() && iter.Prev() {
-				}
+		} else if pb.Next() && iter.Last() {
+			for pb.Next() && iter.Prev() {
 			}
 		}
 	})

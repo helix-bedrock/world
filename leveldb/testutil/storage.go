@@ -8,6 +8,7 @@ package testutil
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -17,7 +18,7 @@ import (
 	"strings"
 	"sync"
 
-	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega"
 
 	"github.com/helix-bedrock/world/leveldb/storage"
 )
@@ -29,8 +30,10 @@ var (
 	storageNum    int
 )
 
+// StorageMode is a storage operation that errors and stalls can be set for.
 type StorageMode int
 
+// Storage operations.
 const (
 	ModeOpen StorageMode = 1 << iota
 	ModeCreate
@@ -184,7 +187,7 @@ func (r *reader) Read(p []byte) (n int, err error) {
 		n, err = r.Reader.Read(p)
 	}
 	r.s.count(ModeRead, r.fd.Type, n)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		r.s.logI("read error, fd=%s n=%d err=%v", r.fd, n, err)
 	}
 	return
@@ -197,7 +200,7 @@ func (r *reader) ReadAt(p []byte, off int64) (n int, err error) {
 		n, err = r.Reader.ReadAt(p, off)
 	}
 	r.s.count(ModeRead, r.fd.Type, n)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		r.s.logI("readAt error, fd=%s offset=%d n=%d err=%v", r.fd, off, n, err)
 	}
 	return
@@ -220,7 +223,7 @@ func (w *writer) Write(p []byte) (n int, err error) {
 		n, err = w.Writer.Write(p)
 	}
 	w.s.count(ModeWrite, w.fd.Type, n)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		w.s.logI("write error, fd=%s n=%d err=%v", w.fd, n, err)
 	}
 	return
@@ -243,6 +246,7 @@ func (w *writer) Close() (err error) {
 	return w.s.fileClose(w.fd, w.Writer)
 }
 
+// Storage wraps a storage.Storage to count operations and inject errors and stalls.
 type Storage struct {
 	storage.Storage
 	path    string
@@ -318,6 +322,7 @@ func (s *Storage) logI(format string, args ...interface{}) {
 	s.logISkip(1, format, args...)
 }
 
+// OnLog sets a function that receives every log line.
 func (s *Storage) OnLog(onLog func(log string)) {
 	s.lmu.Lock()
 	s.onLog = onLog
@@ -329,11 +334,13 @@ func (s *Storage) OnLog(onLog func(log string)) {
 	s.lmu.Unlock()
 }
 
+// Log logs str.
 func (s *Storage) Log(str string) {
 	s.log(1, "Log: "+str)
 	s.Storage.Log(str)
 }
 
+// Lock locks the storage.
 func (s *Storage) Lock() (l storage.Locker, err error) {
 	l, err = s.Storage.Lock()
 	if err != nil {
@@ -345,6 +352,7 @@ func (s *Storage) Lock() (l storage.Locker, err error) {
 	return
 }
 
+// List lists files of type ft.
 func (s *Storage) List(t storage.FileType) (fds []storage.FileDesc, err error) {
 	fds, err = s.Storage.List(t)
 	if err != nil {
@@ -355,6 +363,7 @@ func (s *Storage) List(t storage.FileType) (fds []storage.FileDesc, err error) {
 	return
 }
 
+// GetMeta returns the current manifest.
 func (s *Storage) GetMeta() (fd storage.FileDesc, err error) {
 	fd, err = s.Storage.GetMeta()
 	if err != nil {
@@ -367,8 +376,9 @@ func (s *Storage) GetMeta() (fd storage.FileDesc, err error) {
 	return
 }
 
+// SetMeta sets the current manifest.
 func (s *Storage) SetMeta(fd storage.FileDesc) error {
-	ExpectWithOffset(1, fd.Type).To(Equal(storage.TypeManifest))
+	gomega.ExpectWithOffset(1, fd.Type).To(gomega.Equal(storage.TypeManifest))
 	err := s.Storage.SetMeta(fd)
 	if err != nil {
 		s.logI("set meta failed, fd=%s err=%v", fd, err)
@@ -387,7 +397,7 @@ func (s *Storage) fileClose(fd storage.FileDesc, closer io.Closer) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err == nil {
-		ExpectWithOffset(2, s.opens).To(HaveKey(x), "File closed, fd=%s", fd)
+		gomega.ExpectWithOffset(2, s.opens).To(gomega.HaveKey(x), "File closed, fd=%s", fd)
 		err = closer.Close()
 	}
 	s.countNB(ModeClose, fd.Type, 0)
@@ -403,9 +413,10 @@ func (s *Storage) fileClose(fd storage.FileDesc, closer io.Closer) (err error) {
 
 func (s *Storage) assertOpen(fd storage.FileDesc) {
 	x := packFile(fd)
-	ExpectWithOffset(2, s.opens).NotTo(HaveKey(x), "File open, fd=%s writer=%v", fd, s.opens[x])
+	gomega.ExpectWithOffset(2, s.opens).NotTo(gomega.HaveKey(x), "File open, fd=%s writer=%v", fd, s.opens[x])
 }
 
+// Open opens fd for reading.
 func (s *Storage) Open(fd storage.FileDesc) (r storage.Reader, err error) {
 	err = s.emulateError(ModeOpen, fd.Type)
 	if err == nil {
@@ -428,6 +439,7 @@ func (s *Storage) Open(fd storage.FileDesc) (r storage.Reader, err error) {
 	return
 }
 
+// Create creates fd for writing.
 func (s *Storage) Create(fd storage.FileDesc) (w storage.Writer, err error) {
 	err = s.emulateError(ModeCreate, fd.Type)
 	if err == nil {
@@ -450,6 +462,7 @@ func (s *Storage) Create(fd storage.FileDesc) (w storage.Writer, err error) {
 	return
 }
 
+// Remove removes fd, unless an error is being emulated.
 func (s *Storage) Remove(fd storage.FileDesc) (err error) {
 	err = s.emulateError(ModeRemove, fd.Type)
 	if err == nil {
@@ -470,6 +483,7 @@ func (s *Storage) Remove(fd storage.FileDesc) (err error) {
 	return
 }
 
+// ForceRemove removes fd even when an error is being emulated.
 func (s *Storage) ForceRemove(fd storage.FileDesc) (err error) {
 	s.countNB(ModeRemove, fd.Type, 0)
 	if err = s.Storage.Remove(fd); err != nil {
@@ -480,6 +494,7 @@ func (s *Storage) ForceRemove(fd storage.FileDesc) (err error) {
 	return
 }
 
+// Rename renames oldfd to newfd, unless an error is being emulated.
 func (s *Storage) Rename(oldfd, newfd storage.FileDesc) (err error) {
 	err = s.emulateError(ModeRename, oldfd.Type)
 	if err == nil {
@@ -501,6 +516,7 @@ func (s *Storage) Rename(oldfd, newfd storage.FileDesc) (err error) {
 	return
 }
 
+// ForceRename renames even when an error is being emulated.
 func (s *Storage) ForceRename(oldfd, newfd storage.FileDesc) (err error) {
 	s.countNB(ModeRename, oldfd.Type, 0)
 	if err = s.Storage.Rename(oldfd, newfd); err != nil {
@@ -520,22 +536,25 @@ func (s *Storage) openFiles() string {
 	return out
 }
 
+// CloseCheck checks that every opened file was closed.
 func (s *Storage) CloseCheck() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ExpectWithOffset(1, s.opens).To(BeEmpty(), s.openFiles())
+	gomega.ExpectWithOffset(1, s.opens).To(gomega.BeEmpty(), s.openFiles())
 }
 
+// OnClose sets a function to run on Close.
 func (s *Storage) OnClose(onClose func() (preserve bool, err error)) {
 	s.mu.Lock()
 	s.onClose = onClose
 	s.mu.Unlock()
 }
 
+// Close closes the storage and checks for leaked files.
 func (s *Storage) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ExpectWithOffset(1, s.opens).To(BeEmpty(), s.openFiles())
+	gomega.ExpectWithOffset(1, s.opens).To(gomega.BeEmpty(), s.openFiles())
 	err := s.Storage.Close()
 	if err != nil {
 		s.logI("storage closing failed, err=%v", err)
@@ -574,6 +593,7 @@ func (s *Storage) count(m StorageMode, t storage.FileType, n int) {
 	s.countNB(m, t, n)
 }
 
+// ResetCounter resets the operation counters for m and types t.
 func (s *Storage) ResetCounter(m StorageMode, t storage.FileType) {
 	for _, x := range listFlattenType(m, t) {
 		s.counters[x] = 0
@@ -581,6 +601,7 @@ func (s *Storage) ResetCounter(m StorageMode, t storage.FileType) {
 	}
 }
 
+// Counter returns how often operation m ran on types t.
 func (s *Storage) Counter(m StorageMode, t storage.FileType) (count int, bytes int64) {
 	for _, x := range listFlattenType(m, t) {
 		count += s.counters[x]
@@ -605,6 +626,7 @@ func (s *Storage) emulateError(m StorageMode, t storage.FileType) error {
 	return nil
 }
 
+// EmulateError makes operation m on types t fail with err.
 func (s *Storage) EmulateError(m StorageMode, t storage.FileType, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -614,6 +636,7 @@ func (s *Storage) EmulateError(m StorageMode, t storage.FileType, err error) {
 	}
 }
 
+// EmulateErrorOnce makes the next operation m on types t fail with err.
 func (s *Storage) EmulateErrorOnce(m StorageMode, t storage.FileType, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -623,6 +646,7 @@ func (s *Storage) EmulateErrorOnce(m StorageMode, t storage.FileType, err error)
 	}
 }
 
+// EmulateRandomError makes operation m on types t fail with err with probability prob.
 func (s *Storage) EmulateRandomError(m StorageMode, t storage.FileType, prob float64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -641,6 +665,7 @@ func (s *Storage) stall(m StorageMode, t storage.FileType) {
 	}
 }
 
+// Stall blocks operation m on types t until Release.
 func (s *Storage) Stall(m StorageMode, t storage.FileType) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -649,6 +674,7 @@ func (s *Storage) Stall(m StorageMode, t storage.FileType) {
 	}
 }
 
+// Release unblocks operation m on types t.
 func (s *Storage) Release(m StorageMode, t storage.FileType) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -658,6 +684,7 @@ func (s *Storage) Release(m StorageMode, t storage.FileType) {
 	s.stallCond.Broadcast()
 }
 
+// NewStorage returns an in-memory Storage for tests.
 func NewStorage() *Storage {
 	var (
 		stor storage.Storage
@@ -672,7 +699,7 @@ func NewStorage() *Storage {
 			path = filepath.Join(os.TempDir(), fmt.Sprintf("goleveldb-test%d0%d0%d", os.Getuid(), os.Getpid(), num))
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				stor, err = storage.OpenFile(path, false)
-				ExpectWithOffset(1, err).NotTo(HaveOccurred(), "creating storage at %s", path)
+				gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred(), "creating storage at %s", path)
 				break
 			}
 		}

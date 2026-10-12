@@ -15,12 +15,14 @@ import (
 	"github.com/helix-bedrock/world/leveldb/filter"
 )
 
+// Byte size units.
 const (
 	KiB = 1024
 	MiB = KiB * 1024
 	GiB = MiB * 1024
 )
 
+// Defaults used when an Options field is zero.
 var (
 	DefaultBlockCacher                   = LRUCacher
 	DefaultBlockCacheCapacity            = 8 * MiB
@@ -34,7 +36,7 @@ var (
 	DefaultCompactionTableSizeMultiplier = 1.0
 	DefaultCompactionTotalSize           = 10 * MiB
 	DefaultCompactionTotalSizeMultiplier = 10.0
-	// Bedrock cannot read snappy blocks, so Helix defaults to its format.
+	// DefaultCompressionType is flate: Bedrock cannot read snappy blocks.
 	DefaultCompressionType        = FlateCompression
 	DefaultIteratorSamplingRate   = 1 * MiB
 	DefaultOpenFilesCacher        = LRUCacher
@@ -61,6 +63,7 @@ func (f *cacherFunc) New(capacity int) cache.Cacher {
 	return nil
 }
 
+// CacherFunc returns a Cacher that creates caches with f.
 func CacherFunc(f func(capacity int) cache.Cacher) Cacher {
 	return &cacherFunc{f}
 }
@@ -123,6 +126,7 @@ func (c Compression) String() string {
 	return "invalid"
 }
 
+// Block compression types.
 const (
 	DefaultCompression Compression = iota
 	NoCompression
@@ -138,34 +142,34 @@ const (
 type Strict uint
 
 const (
-	// If present then a corrupted or invalid chunk or block in manifest
+	// StrictManifest means that, if present, a corrupted or invalid chunk or block in manifest
 	// journal will cause an error instead of being dropped.
 	// This will prevent database with corrupted manifest to be opened.
 	StrictManifest Strict = 1 << iota
 
-	// If present then journal chunk checksum will be verified.
+	// StrictJournalChecksum means that, if present, journal chunk checksum will be verified.
 	StrictJournalChecksum
 
-	// If present then a corrupted or invalid chunk or block in journal
+	// StrictJournal means that, if present, a corrupted or invalid chunk or block in journal
 	// will cause an error instead of being dropped.
 	// This will prevent database with corrupted journal to be opened.
 	StrictJournal
 
-	// If present then 'sorted table' block checksum will be verified.
+	// StrictBlockChecksum means that, if present, 'sorted table' block checksum will be verified.
 	// This has effect on both 'read operation' and compaction.
 	StrictBlockChecksum
 
-	// If present then a corrupted 'sorted table' will fails compaction.
+	// StrictCompaction means that, if present, a corrupted 'sorted table' will fails compaction.
 	// The database will enter read-only mode.
 	StrictCompaction
 
-	// If present then a corrupted 'sorted table' will halts 'read operation'.
+	// StrictReader means that, if present, a corrupted 'sorted table' will halts 'read operation'.
 	StrictReader
 
-	// If present then leveldb.Recover will drop corrupted 'sorted table'.
+	// StrictRecovery means that, if present, leveldb.Recover will drop corrupted 'sorted table'.
 	StrictRecovery
 
-	// This only applicable for ReadOptions, if present then this ReadOptions
+	// StrictOverride only applies to ReadOptions; if present, then this ReadOptions
 	// 'strict level' will override global ones.
 	StrictOverride
 
@@ -430,6 +434,7 @@ type Options struct {
 	MaxManifestFileSize int64
 }
 
+// GetAltFilters returns AltFilters, or its default when o is nil or the field is unset.
 func (o *Options) GetAltFilters() []filter.Filter {
 	if o == nil {
 		return nil
@@ -437,6 +442,7 @@ func (o *Options) GetAltFilters() []filter.Filter {
 	return o.AltFilters
 }
 
+// GetBlockCacher returns BlockCacher, or its default when o is nil or the field is unset.
 func (o *Options) GetBlockCacher() Cacher {
 	if o == nil || o.BlockCacher == nil {
 		return DefaultBlockCacher
@@ -444,6 +450,7 @@ func (o *Options) GetBlockCacher() Cacher {
 	return o.BlockCacher
 }
 
+// GetBlockCacheCapacity returns BlockCacheCapacity, or its default when o is nil or the field is unset.
 func (o *Options) GetBlockCacheCapacity() int {
 	if o == nil || o.BlockCacheCapacity == 0 {
 		return DefaultBlockCacheCapacity
@@ -453,6 +460,7 @@ func (o *Options) GetBlockCacheCapacity() int {
 	return o.BlockCacheCapacity
 }
 
+// GetBlockCacheEvictRemoved returns BlockCacheEvictRemoved, or its default when o is nil or the field is unset.
 func (o *Options) GetBlockCacheEvictRemoved() bool {
 	if o == nil {
 		return false
@@ -460,6 +468,7 @@ func (o *Options) GetBlockCacheEvictRemoved() bool {
 	return o.BlockCacheEvictRemoved
 }
 
+// GetBlockRestartInterval returns BlockRestartInterval, or its default when o is nil or the field is unset.
 func (o *Options) GetBlockRestartInterval() int {
 	if o == nil || o.BlockRestartInterval <= 0 {
 		return DefaultBlockRestartInterval
@@ -467,6 +476,7 @@ func (o *Options) GetBlockRestartInterval() int {
 	return o.BlockRestartInterval
 }
 
+// GetBlockSize returns BlockSize, or its default when o is nil or the field is unset.
 func (o *Options) GetBlockSize() int {
 	if o == nil || o.BlockSize <= 0 {
 		return DefaultBlockSize
@@ -474,6 +484,7 @@ func (o *Options) GetBlockSize() int {
 	return o.BlockSize
 }
 
+// GetCompactionExpandLimit returns CompactionExpandLimit, or its default when o is nil or the field is unset.
 func (o *Options) GetCompactionExpandLimit(level int) int {
 	factor := DefaultCompactionExpandLimitFactor
 	if o != nil && o.CompactionExpandLimitFactor > 0 {
@@ -482,6 +493,7 @@ func (o *Options) GetCompactionExpandLimit(level int) int {
 	return o.GetCompactionTableSize(level+1) * factor
 }
 
+// GetCompactionGPOverlaps returns CompactionGPOverlaps, or its default when o is nil or the field is unset.
 func (o *Options) GetCompactionGPOverlaps(level int) int {
 	factor := DefaultCompactionGPOverlapsFactor
 	if o != nil && o.CompactionGPOverlapsFactor > 0 {
@@ -490,6 +502,7 @@ func (o *Options) GetCompactionGPOverlaps(level int) int {
 	return o.GetCompactionTableSize(level+2) * factor
 }
 
+// GetCompactionL0Trigger returns CompactionL0Trigger, or its default when o is nil or the field is unset.
 func (o *Options) GetCompactionL0Trigger() int {
 	if o == nil || o.CompactionL0Trigger == 0 {
 		return DefaultCompactionL0Trigger
@@ -497,6 +510,7 @@ func (o *Options) GetCompactionL0Trigger() int {
 	return o.CompactionL0Trigger
 }
 
+// GetCompactionSourceLimit returns CompactionSourceLimit, or its default when o is nil or the field is unset.
 func (o *Options) GetCompactionSourceLimit(level int) int {
 	factor := DefaultCompactionSourceLimitFactor
 	if o != nil && o.CompactionSourceLimitFactor > 0 {
@@ -505,6 +519,7 @@ func (o *Options) GetCompactionSourceLimit(level int) int {
 	return o.GetCompactionTableSize(level+1) * factor
 }
 
+// GetCompactionTableSize returns CompactionTableSize, or its default when o is nil or the field is unset.
 func (o *Options) GetCompactionTableSize(level int) int {
 	var (
 		base = DefaultCompactionTableSize
@@ -526,6 +541,7 @@ func (o *Options) GetCompactionTableSize(level int) int {
 	return int(float64(base) * mult)
 }
 
+// GetCompactionTotalSize returns CompactionTotalSize, or its default when o is nil or the field is unset.
 func (o *Options) GetCompactionTotalSize(level int) int64 {
 	var (
 		base = DefaultCompactionTotalSize
@@ -547,6 +563,7 @@ func (o *Options) GetCompactionTotalSize(level int) int64 {
 	return int64(float64(base) * mult)
 }
 
+// GetComparer returns Comparer, or its default when o is nil or the field is unset.
 func (o *Options) GetComparer() comparer.Comparer {
 	if o == nil || o.Comparer == nil {
 		return comparer.DefaultComparer
@@ -554,6 +571,7 @@ func (o *Options) GetComparer() comparer.Comparer {
 	return o.Comparer
 }
 
+// GetCompression returns Compression, or its default when o is nil or the field is unset.
 func (o *Options) GetCompression() Compression {
 	if o == nil || o.Compression <= DefaultCompression || o.Compression >= nCompression {
 		return DefaultCompressionType
@@ -561,6 +579,7 @@ func (o *Options) GetCompression() Compression {
 	return o.Compression
 }
 
+// GetDisableBufferPool returns DisableBufferPool, or its default when o is nil or the field is unset.
 func (o *Options) GetDisableBufferPool() bool {
 	if o == nil {
 		return false
@@ -568,6 +587,7 @@ func (o *Options) GetDisableBufferPool() bool {
 	return o.DisableBufferPool
 }
 
+// GetDisableBlockCache returns DisableBlockCache, or its default when o is nil or the field is unset.
 func (o *Options) GetDisableBlockCache() bool {
 	if o == nil {
 		return false
@@ -575,6 +595,7 @@ func (o *Options) GetDisableBlockCache() bool {
 	return o.DisableBlockCache
 }
 
+// GetDisableCompactionBackoff returns DisableCompactionBackoff, or its default when o is nil or the field is unset.
 func (o *Options) GetDisableCompactionBackoff() bool {
 	if o == nil {
 		return false
@@ -582,6 +603,7 @@ func (o *Options) GetDisableCompactionBackoff() bool {
 	return o.DisableCompactionBackoff
 }
 
+// GetDisableLargeBatchTransaction returns DisableLargeBatchTransaction, or its default when o is nil or the field is unset.
 func (o *Options) GetDisableLargeBatchTransaction() bool {
 	if o == nil {
 		return false
@@ -589,6 +611,7 @@ func (o *Options) GetDisableLargeBatchTransaction() bool {
 	return o.DisableLargeBatchTransaction
 }
 
+// GetDisableSeeksCompaction returns DisableSeeksCompaction, or its default when o is nil or the field is unset.
 func (o *Options) GetDisableSeeksCompaction() bool {
 	if o == nil {
 		return false
@@ -596,6 +619,7 @@ func (o *Options) GetDisableSeeksCompaction() bool {
 	return o.DisableSeeksCompaction
 }
 
+// GetErrorIfExist returns ErrorIfExist, or its default when o is nil or the field is unset.
 func (o *Options) GetErrorIfExist() bool {
 	if o == nil {
 		return false
@@ -603,6 +627,7 @@ func (o *Options) GetErrorIfExist() bool {
 	return o.ErrorIfExist
 }
 
+// GetErrorIfMissing returns ErrorIfMissing, or its default when o is nil or the field is unset.
 func (o *Options) GetErrorIfMissing() bool {
 	if o == nil {
 		return false
@@ -610,6 +635,7 @@ func (o *Options) GetErrorIfMissing() bool {
 	return o.ErrorIfMissing
 }
 
+// GetFilter returns Filter, or its default when o is nil or the field is unset.
 func (o *Options) GetFilter() filter.Filter {
 	if o == nil {
 		return nil
@@ -617,6 +643,7 @@ func (o *Options) GetFilter() filter.Filter {
 	return o.Filter
 }
 
+// GetIteratorSamplingRate returns IteratorSamplingRate, or its default when o is nil or the field is unset.
 func (o *Options) GetIteratorSamplingRate() int {
 	if o == nil || o.IteratorSamplingRate == 0 {
 		return DefaultIteratorSamplingRate
@@ -626,6 +653,7 @@ func (o *Options) GetIteratorSamplingRate() int {
 	return o.IteratorSamplingRate
 }
 
+// GetNoSync returns NoSync, or its default when o is nil or the field is unset.
 func (o *Options) GetNoSync() bool {
 	if o == nil {
 		return false
@@ -633,6 +661,7 @@ func (o *Options) GetNoSync() bool {
 	return o.NoSync
 }
 
+// GetNoWriteMerge returns NoWriteMerge, or its default when o is nil or the field is unset.
 func (o *Options) GetNoWriteMerge() bool {
 	if o == nil {
 		return false
@@ -640,6 +669,7 @@ func (o *Options) GetNoWriteMerge() bool {
 	return o.NoWriteMerge
 }
 
+// GetOpenFilesCacher returns OpenFilesCacher, or its default when o is nil or the field is unset.
 func (o *Options) GetOpenFilesCacher() Cacher {
 	if o == nil || o.OpenFilesCacher == nil {
 		return DefaultOpenFilesCacher
@@ -647,6 +677,7 @@ func (o *Options) GetOpenFilesCacher() Cacher {
 	return o.OpenFilesCacher
 }
 
+// GetOpenFilesCacheCapacity returns OpenFilesCacheCapacity, or its default when o is nil or the field is unset.
 func (o *Options) GetOpenFilesCacheCapacity() int {
 	if o == nil || o.OpenFilesCacheCapacity == 0 {
 		return DefaultOpenFilesCacheCapacity
@@ -656,6 +687,7 @@ func (o *Options) GetOpenFilesCacheCapacity() int {
 	return o.OpenFilesCacheCapacity
 }
 
+// GetReadOnly returns ReadOnly, or its default when o is nil or the field is unset.
 func (o *Options) GetReadOnly() bool {
 	if o == nil {
 		return false
@@ -663,6 +695,7 @@ func (o *Options) GetReadOnly() bool {
 	return o.ReadOnly
 }
 
+// GetStrict returns Strict, or its default when o is nil or the field is unset.
 func (o *Options) GetStrict(strict Strict) bool {
 	if o == nil || o.Strict == 0 {
 		return DefaultStrict&strict != 0
@@ -670,6 +703,7 @@ func (o *Options) GetStrict(strict Strict) bool {
 	return o.Strict&strict != 0
 }
 
+// GetWriteBuffer returns WriteBuffer, or its default when o is nil or the field is unset.
 func (o *Options) GetWriteBuffer() int {
 	if o == nil || o.WriteBuffer <= 0 {
 		return DefaultWriteBuffer
@@ -677,6 +711,7 @@ func (o *Options) GetWriteBuffer() int {
 	return o.WriteBuffer
 }
 
+// GetWriteL0PauseTrigger returns WriteL0PauseTrigger, or its default when o is nil or the field is unset.
 func (o *Options) GetWriteL0PauseTrigger() int {
 	if o == nil || o.WriteL0PauseTrigger == 0 {
 		return DefaultWriteL0PauseTrigger
@@ -684,6 +719,7 @@ func (o *Options) GetWriteL0PauseTrigger() int {
 	return o.WriteL0PauseTrigger
 }
 
+// GetWriteL0SlowdownTrigger returns WriteL0SlowdownTrigger, or its default when o is nil or the field is unset.
 func (o *Options) GetWriteL0SlowdownTrigger() int {
 	if o == nil || o.WriteL0SlowdownTrigger == 0 {
 		return DefaultWriteL0SlowdownTrigger
@@ -691,6 +727,7 @@ func (o *Options) GetWriteL0SlowdownTrigger() int {
 	return o.WriteL0SlowdownTrigger
 }
 
+// GetFilterBaseLg returns FilterBaseLg, or its default when o is nil or the field is unset.
 func (o *Options) GetFilterBaseLg() int {
 	if o == nil || o.FilterBaseLg <= 0 {
 		return DefaultFilterBaseLg
@@ -713,6 +750,7 @@ type ReadOptions struct {
 	Strict Strict
 }
 
+// GetDontFillCache returns DontFillCache, or its default when the options is nil or the field is unset.
 func (ro *ReadOptions) GetDontFillCache() bool {
 	if ro == nil {
 		return false
@@ -720,6 +758,7 @@ func (ro *ReadOptions) GetDontFillCache() bool {
 	return ro.DontFillCache
 }
 
+// GetStrict returns Strict, or its default when the options is nil or the field is unset.
 func (ro *ReadOptions) GetStrict(strict Strict) bool {
 	if ro == nil {
 		return false
@@ -750,6 +789,7 @@ type WriteOptions struct {
 	Sync bool
 }
 
+// GetNoWriteMerge returns NoWriteMerge, or its default when the options is nil or the field is unset.
 func (wo *WriteOptions) GetNoWriteMerge() bool {
 	if wo == nil {
 		return false
@@ -757,6 +797,7 @@ func (wo *WriteOptions) GetNoWriteMerge() bool {
 	return wo.NoWriteMerge
 }
 
+// GetSync returns Sync, or its default when the options is nil or the field is unset.
 func (wo *WriteOptions) GetSync() bool {
 	if wo == nil {
 		return false
@@ -764,6 +805,7 @@ func (wo *WriteOptions) GetSync() bool {
 	return wo.Sync
 }
 
+// GetStrict reports whether strict is set, using only ro when ro sets StrictOverride.
 func GetStrict(o *Options, ro *ReadOptions, strict Strict) bool {
 	if ro.GetStrict(StrictOverride) {
 		return ro.GetStrict(strict)
@@ -771,6 +813,7 @@ func GetStrict(o *Options, ro *ReadOptions, strict Strict) bool {
 	return o.GetStrict(strict) || ro.GetStrict(strict)
 }
 
+// GetMaxManifestFileSize returns MaxManifestFileSize, or its default when o is nil or the field is unset.
 func (o *Options) GetMaxManifestFileSize() int64 {
 	if o == nil || o.MaxManifestFileSize <= 0 {
 		return DefaultMaxManifestFileSize

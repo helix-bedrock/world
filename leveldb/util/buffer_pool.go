@@ -9,7 +9,6 @@ package util
 import (
 	"encoding/binary"
 	"fmt"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -43,13 +42,14 @@ func (p *BufferPool) Get(n int) []byte {
 	} else {
 		// If there is enough capacity in the bytes grabbed, resize the length
 		// to n and return.
-		if n < cap(b) {
+		switch {
+		case n < cap(b):
 			atomic.AddUint32(&p.less, 1)
 			return b[:n]
-		} else if n == cap(b) {
+		case n == cap(b):
 			atomic.AddUint32(&p.equal, 1)
 			return b[:n]
-		} else if n > cap(b) {
+		case n > cap(b):
 			atomic.AddUint32(&p.greater, 1)
 			p.pool.Put(b)
 		}
@@ -90,14 +90,9 @@ type byteSlicePool struct {
 
 func (p *byteSlicePool) Get() (s []byte) {
 	if ptr, ok := p.pool.Get().(unsafe.Pointer); ok {
-		sh := (*reflect.SliceHeader)(unsafe.Pointer(&s))
-		// temporarily set len(s) to 8
-		sh.Data = uintptr(ptr)
-		sh.Cap = 8
-		sh.Len = 8
-		// extrat and set actual cap
-		sh.Cap = int(binary.BigEndian.Uint64(s))
-		sh.Len = 0
+		// The first 8 bytes hold the slice's capacity (see Put).
+		c := int(binary.BigEndian.Uint64(unsafe.Slice((*byte)(ptr), 8))) //nolint:gosec // reviewed: reads the capacity Put stored
+		s = unsafe.Slice((*byte)(ptr), c)[:0]                            //nolint:gosec // reviewed: rebuilds the slice Put pooled
 	}
 	return
 }
@@ -108,6 +103,6 @@ func (p *byteSlicePool) Put(b []byte) {
 		b = b[:8]
 		binary.BigEndian.PutUint64(b, uint64(cap(b)))
 		// pools the pointer of the first byte
-		p.pool.Put(unsafe.Pointer(&b[0]))
+		p.pool.Put(unsafe.Pointer(&b[0])) //nolint:gosec // reviewed: Get rebuilds the slice from this pointer
 	}
 }

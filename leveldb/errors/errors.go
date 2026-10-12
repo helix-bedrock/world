@@ -27,6 +27,12 @@ func New(text string) error {
 	return errors.New(text)
 }
 
+// Is reports whether any error in err's tree matches target, as errors.Is.
+func Is(err, target error) bool { return errors.Is(err, target) }
+
+// As finds the first error in err's tree that matches target, as errors.As.
+func As(err error, target any) bool { return errors.As(err, target) }
+
 // ErrCorrupted is the type that wraps errors that indicate corruption in
 // the database.
 type ErrCorrupted struct {
@@ -49,13 +55,9 @@ func NewErrCorrupted(fd storage.FileDesc, err error) error {
 // IsCorrupted returns a boolean indicating whether the error is indicating
 // a corruption.
 func IsCorrupted(err error) bool {
-	switch err.(type) {
-	case *ErrCorrupted:
-		return true
-	case *storage.ErrCorrupted:
-		return true
-	}
-	return false
+	var e *ErrCorrupted
+	var se *storage.ErrCorrupted
+	return errors.As(err, &e) || errors.As(err, &se)
 }
 
 // ErrMissingFiles is the type that indicating a corruption due to missing
@@ -69,11 +71,9 @@ func (e *ErrMissingFiles) Error() string { return "file missing" }
 // SetFd sets 'file info' of the given error with the given file.
 // Currently only ErrCorrupted is supported, otherwise will do nothing.
 func SetFd(err error, fd storage.FileDesc) error {
-	switch x := err.(type) {
-	case *ErrCorrupted:
+	var x *ErrCorrupted
+	if errors.As(err, &x) {
 		x.Fd = fd
-		return x
-	default:
-		return err
 	}
+	return err
 }

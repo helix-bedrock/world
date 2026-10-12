@@ -150,7 +150,7 @@ func (f recoveryFixture) manifestName() string {
 // write creates dir and writes the fixture's CURRENT, manifest and journal.
 func (f recoveryFixture) write(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create fixture dir: %v", err)
+		return fmt.Errorf("create fixture dir: %w", err)
 	}
 	if err := f.writeManifest(dir); err != nil {
 		return err
@@ -160,7 +160,7 @@ func (f recoveryFixture) write(dir string) error {
 	}
 	current := []byte(f.manifestName() + "\n")
 	if err := os.WriteFile(filepath.Join(dir, "CURRENT"), current, 0o644); err != nil {
-		return fmt.Errorf("write CURRENT: %v", err)
+		return fmt.Errorf("write CURRENT: %w", err)
 	}
 	return nil
 }
@@ -190,7 +190,7 @@ func (f recoveryFixture) writeJournal(dir string) error {
 	for i, b := range f.batches {
 		rec, err := fixtureEncodeBatch(b)
 		if err != nil {
-			return fmt.Errorf("encode batch %d: %v", i, err)
+			return fmt.Errorf("encode batch %d: %w", i, err)
 		}
 		records = append(records, rec)
 	}
@@ -228,27 +228,27 @@ func fixtureEncodeBatch(b fixtureBatch) ([]byte, error) {
 func fixtureWriteJournalFile(path string, records [][]byte) error {
 	file, err := os.Create(path)
 	if err != nil {
-		return fmt.Errorf("create %s: %v", filepath.Base(path), err)
+		return fmt.Errorf("create %s: %w", filepath.Base(path), err)
 	}
 
 	w := journal.NewWriter(file)
 	for i, rec := range records {
 		dst, err := w.Next()
 		if err != nil {
-			file.Close()
-			return fmt.Errorf("start record %d in %s: %v", i, filepath.Base(path), err)
+			_ = file.Close()
+			return fmt.Errorf("start record %d in %s: %w", i, filepath.Base(path), err)
 		}
 		if _, err := dst.Write(rec); err != nil {
-			file.Close()
-			return fmt.Errorf("write record %d in %s: %v", i, filepath.Base(path), err)
+			_ = file.Close()
+			return fmt.Errorf("write record %d in %s: %w", i, filepath.Base(path), err)
 		}
 	}
 	if err := w.Close(); err != nil {
-		file.Close()
-		return fmt.Errorf("flush %s: %v", filepath.Base(path), err)
+		_ = file.Close()
+		return fmt.Errorf("flush %s: %w", filepath.Base(path), err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close %s: %v", filepath.Base(path), err)
+		return fmt.Errorf("close %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

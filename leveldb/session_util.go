@@ -7,6 +7,7 @@
 package leveldb
 
 import (
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -23,7 +24,8 @@ type dropper struct {
 }
 
 func (d dropper) Drop(err error) {
-	if e, ok := err.(*journal.ErrCorrupted); ok {
+	var e *journal.ErrCorrupted
+	if errors.As(err, &e) {
 		d.s.logf("journal@drop %s-%d S·%s %q", d.fd.Type, d.fd.Num, shortenb(int64(e.Size)), e.Reason)
 	} else {
 		d.s.logf("journal@drop %s-%d %q", d.fd.Type, d.fd.Num, err)
@@ -81,11 +83,12 @@ func (s *session) refLoop() {
 	// reference value
 	addFileRef := func(fnum int64, ref int) int {
 		ref += fileRef[fnum]
-		if ref > 0 {
+		switch {
+		case ref > 0:
 			fileRef[fnum] = ref
-		} else if ref == 0 {
+		case ref == 0:
 			delete(fileRef, fnum)
-		} else {
+		default:
 			// Internal bug; upstream panicked.
 			s.logf("session: negative ref for file %d", fnum)
 			delete(fileRef, fnum)
@@ -428,10 +431,10 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 		if err == nil {
 			s.recordCommited(rec)
 			if s.manifest != nil {
-				s.manifest.Close()
+				_ = s.manifest.Close()
 			}
 			if s.manifestWriter != nil {
-				s.manifestWriter.Close()
+				_ = s.manifestWriter.Close()
 			}
 			if !s.manifestFd.Zero() {
 				err = s.stor.Remove(s.manifestFd)
@@ -441,9 +444,9 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 			s.manifest = jw
 			s.baseManifestSize = jw.Size()
 		} else {
-			writer.Close()
+			_ = writer.Close()
 			if rerr := s.stor.Remove(fd); err != nil {
-				err = fmt.Errorf("newManifest error: %v, cleanup error (%v)", err, rerr)
+				err = fmt.Errorf("newManifest error: %w, cleanup error (%w)", err, rerr)
 			}
 			s.reuseFileNum(fd.Num)
 		}

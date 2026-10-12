@@ -86,7 +86,7 @@ func (r *lru) Promote(n *Node) {
 		if n.Size() <= r.capacity {
 			rn := &lruNode{n: n, h: n.GetHandle()}
 			rn.insert(&r.recent)
-			n.CacheData = unsafe.Pointer(rn)
+			n.CacheData = unsafe.Pointer(rn) //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 			r.used += n.Size()
 
 			for r.used > r.capacity {
@@ -117,7 +117,7 @@ func (r *lru) Promote(n *Node) {
 func (r *lru) Ban(n *Node) {
 	r.mu.Lock()
 	if n.CacheData == nil {
-		n.CacheData = unsafe.Pointer(&lruNode{n: n, ban: true})
+		n.CacheData = unsafe.Pointer(&lruNode{n: n, ban: true}) //nolint:gosec // reviewed: atomically swapped pointer, as in upstream goleveldb
 	} else {
 		rn := (*lruNode)(n.CacheData)
 		if !rn.ban {

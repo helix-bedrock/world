@@ -21,7 +21,7 @@ type testFileRec struct {
 func TestVersionStaging(t *testing.T) {
 	gomega.RegisterTestingT(t)
 	stor := testutil.NewStorage()
-	defer stor.Close()
+	defer func() { _ = stor.Close() }()
 	s, err := newSession(stor, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestVersionStaging(t *testing.T) {
 func TestVersionReference(t *testing.T) {
 	gomega.RegisterTestingT(t)
 	stor := testutil.NewStorage()
-	defer stor.Close()
+	defer func() { _ = stor.Close() }()
 	s, err := newSession(stor, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -384,7 +384,7 @@ func BenchmarkVersionStagingTrivial(b *testing.B) {
 
 func benchmarkVersionStaging(b *testing.B, trivial bool, size int) {
 	stor := storage.NewMemStorage()
-	defer stor.Close()
+	defer func() { _ = stor.Close() }()
 	s, err := newSession(stor, nil)
 	if err != nil {
 		b.Fatal(err)

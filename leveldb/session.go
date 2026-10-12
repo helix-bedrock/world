@@ -102,10 +102,10 @@ func newSession(stor storage.Storage, o *opt.Options) (s *session, err error) {
 func (s *session) close() {
 	s.tops.close()
 	if s.manifest != nil {
-		s.manifest.Close()
+		_ = s.manifest.Close()
 	}
 	if s.manifestWriter != nil {
-		s.manifestWriter.Close()
+		_ = s.manifestWriter.Close()
 	}
 	s.manifest = nil
 	s.manifestWriter = nil
@@ -148,7 +148,7 @@ func (s *session) recover() (err error) {
 	if err != nil {
 		return
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	var (
 		// Options.
@@ -162,7 +162,7 @@ func (s *session) recover() (err error) {
 		var r io.Reader
 		r, err = jr.Next()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				err = nil
 				break
 			}
@@ -237,13 +237,14 @@ func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
 		}
 	}()
 
-	if s.manifest == nil {
+	switch {
+	case s.manifest == nil:
 		// manifest journal writer not yet created, create one
 		err = s.newManifest(r, nv)
-	} else if s.shouldRebuildManifest() {
+	case s.shouldRebuildManifest():
 		// pass nil sessionRecord to avoid over-reference table file
 		err = s.newManifest(nil, nv)
-	} else {
+	default:
 		err = s.flushManifest(r)
 	}
 
