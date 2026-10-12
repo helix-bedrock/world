@@ -34,7 +34,9 @@ jobs:
         run: go vet ./...
       - name: Test
         if: hashFiles('go.mod') != ''
-        run: go test -race -count=1 ./...
+        # -short: goleveldb's stress tests take over 10 minutes under -race;
+        # upstream ran CI with -short too.
+        run: go test -race -short -count=1 -timeout 15m ./...
 
   lint:
     name: Lint
