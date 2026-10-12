@@ -148,7 +148,9 @@ func (db *DB) LoadColumn(pos ChunkPos, dim Dimension) (*chunk.Column, error) {
 	return col, nil
 }
 
-const chunkVersion = 42
+// chunkVersion is the chunk format version written. 41 is what Minecraft
+// 1.26.52 itself writes (seen in its saved worlds); Dragonfly wrote 42.
+const chunkVersion = 41
 
 func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	var cdata chunk.SerialisedData
@@ -383,7 +385,9 @@ func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 	db.storeVersion(batch, k, chunkVersion)
 	db.storeBiomes(batch, k, data.Biomes)
 	db.storeSubChunks(batch, k, data.SubChunks, col.Chunk.Range())
-	db.storeFinalisation(batch, k, finalisationPopulated)
+	// No finalisation ('6') key: Minecraft 1.26.52 only keeps it on a few
+	// old chunks and writes none itself, so Helix does not add one either.
+	// Existing keys, including the newer '=' and '@' ones, are left as is.
 	db.storeLegacyStates(batch, k, col.Chunk.LegacyStates())
 	db.storeEntities(batch, k, col.Entities)
 	db.storeBlockEntities(batch, k, col.BlockEntities)
@@ -407,14 +411,15 @@ func (db *DB) storeBiomes(batch *leveldb.Batch, k dbKey, biomes []byte) {
 
 func (db *DB) storeSubChunks(batch *leveldb.Batch, k dbKey, subChunks [][]byte, r cube.Range) {
 	for i, sub := range subChunks {
-		batch.Put(k.Sum(keySubChunkData, byte(i+(r[0]>>4))), sub)
+		key := k.Sum(keySubChunkData, byte(i+(r[0]>>4)))
+		if len(sub) == 0 {
+			// No layers: the game stores nothing, so remove any
+			// sub chunk previously saved at this Y.
+			batch.Delete(key)
+			continue
+		}
+		batch.Put(key, sub)
 	}
-}
-
-func (db *DB) storeFinalisation(batch *leveldb.Batch, k dbKey, finalisation uint32) {
-	p := make([]byte, 4)
-	binary.LittleEndian.PutUint32(p, finalisation)
-	batch.Put(k.Sum(keyFinalisation), p)
 }
 
 // storeLegacyStates keeps keyLegacyStates while the chunk's derived states are still pending and removes
@@ -482,7 +487,8 @@ func entityIndex(id int64) []byte {
 
 func (db *DB) storeBlockEntities(batch *leveldb.Batch, k dbKey, blockEntities []chunk.BlockEntity) {
 	if len(blockEntities) == 0 {
-		batch.Delete(k.Sum(keyBlockEntities))
+		// The game keeps an empty value rather than deleting the key.
+		batch.Put(k.Sum(keyBlockEntities), nil)
 		return
 	}
 

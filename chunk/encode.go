@@ -58,7 +58,13 @@ type (
 // NBT.
 func Encode(c *Chunk, e Encoding) SerialisedData {
 	d := SerialisedData{SubChunks: make([][]byte, len(c.sub))}
-	for i := range c.sub {
+	for i, sub := range c.sub {
+		// The game saves all-air sub chunks (one layer of air) but never
+		// one with no layers, which a never-touched SubChunk has. Leave
+		// those nil on disk; DiskDecode treats nil as absent.
+		if e.network() == 0 && (sub == nil || len(sub.Layers()) == 0) {
+			continue
+		}
 		d.SubChunks[i] = EncodeSubChunk(c, e, i)
 	}
 	d.Biomes = EncodeBiomes(c, e)
@@ -93,10 +99,20 @@ func EncodeBiomes(c *Chunk, e Encoding) []byte {
 		pool.Put(buf)
 	}()
 
-	var previous *PalettedStorage
-	for _, b := range c.biomes {
-		encodePalettedStorage(buf, b, previous, e, BiomePaletteEncoding)
-		previous = b
+	if e.network() == 0 {
+		// On disk the game writes every biome storage in full, with the
+		// palette-type bit set (biome palettes hold plain IDs, not NBT),
+		// and never the "same as previous" marker. Match it exactly.
+		for _, b := range c.biomes {
+			encodeStorage(buf, b, 1)
+			DiskEncoding.encodePalette(buf, b.palette, BiomePaletteEncoding)
+		}
+	} else {
+		var previous *PalettedStorage
+		for _, b := range c.biomes {
+			encodePalettedStorage(buf, b, previous, e, BiomePaletteEncoding)
+			previous = b
+		}
 	}
 	biomes := make([]byte, buf.Len())
 	_, _ = buf.Read(biomes)
@@ -110,14 +126,19 @@ func encodePalettedStorage(buf *bytes.Buffer, storage, previous *PalettedStorage
 		_, _ = buf.Write([]byte{0x7f<<1 | e.network()})
 		return
 	}
+	encodeStorage(buf, storage, e.network())
+	e.encodePalette(buf, storage.palette, pe)
+}
+
+// encodeStorage writes a storage's header byte (bits per index and the
+// palette-type flag) and its packed indices.
+func encodeStorage(buf *bytes.Buffer, storage *PalettedStorage, flag byte) {
 	b := make([]byte, len(storage.indices)*4+1)
-	b[0] = byte(storage.bitsPerIndex<<1) | e.network()
+	b[0] = byte(storage.bitsPerIndex<<1) | flag
 
 	for i, v := range storage.indices {
 		// Explicitly don't use the binary package to greatly improve performance of writing the uint32s.
 		b[i*4+1], b[i*4+2], b[i*4+3], b[i*4+4] = byte(v), byte(v>>8), byte(v>>16), byte(v>>24)
 	}
 	_, _ = buf.Write(b)
-
-	e.encodePalette(buf, storage.palette, pe)
 }
