@@ -210,3 +210,46 @@ func (networkEncoding) decodePalette(buf *bytes.Buffer, blockSize paletteSize, _
 	}
 	return &Palette{values: blocks, size: blockSize}, nil
 }
+
+// NetworkHashEncoding is NetworkEncoding for clients told to use block
+// network hashes (StartGame's UseBlockNetworkIDHashes), as BDS 1.26.60
+// does: block palettes hold each state's hash instead of its runtime ID.
+// Biome palettes are written as by NetworkEncoding.
+var NetworkHashEncoding networkHashEncoding
+
+// networkHashEncoding implements NetworkHashEncoding.
+type networkHashEncoding struct{}
+
+func (networkHashEncoding) network() byte { return 1 }
+func (networkHashEncoding) encodePalette(buf *bytes.Buffer, p *Palette, e paletteEncoding) {
+	bpe, ok := e.(BlockPaletteEncoding)
+	if !ok {
+		NetworkEncoding.encodePalette(buf, p, e)
+		return
+	}
+	if p.size != 0 {
+		_ = protocol.WriteVarint32(buf, int32(p.Len()))
+	}
+	for _, val := range p.values {
+		h, _ := bpe.Blocks.RuntimeIDToHash(val)
+		_ = protocol.WriteVarint32(buf, int32(h)) //nolint:gosec // hashes are sent as their raw bits
+	}
+}
+func (networkHashEncoding) decodePalette(buf *bytes.Buffer, blockSize paletteSize, e paletteEncoding) (*Palette, error) {
+	p, err := NetworkEncoding.decodePalette(buf, blockSize, e)
+	if err != nil {
+		return nil, err
+	}
+	bpe, ok := e.(BlockPaletteEncoding)
+	if !ok {
+		return p, nil
+	}
+	for i, h := range p.values {
+		rid, ok := bpe.Blocks.HashToRuntimeID(h)
+		if !ok {
+			return nil, fmt.Errorf("unknown block network hash %#x", h)
+		}
+		p.values[i] = rid
+	}
+	return p, nil
+}

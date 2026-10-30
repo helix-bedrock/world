@@ -35,7 +35,15 @@ type Chunk struct {
 	// chunk was decoded; BDS writes the "copy previous" marker for the rest.
 	// Zero for a chunk that was not decoded.
 	biomeSections int
+	// shared marks, per section, the sub chunk and biome storage that a
+	// Snapshot still shares: the next write to it copies it first.
+	shared []uint8
 }
+
+const (
+	sharedSub uint8 = 1 << iota
+	sharedBiome
+)
 
 // New initialises a new chunk and returns it, so that it may be used.
 // The BlockRegistry passed must be finalized and must correspond to the runtime IDs used in the chunk's storages.
@@ -78,6 +86,65 @@ func (chunk *Chunk) Clone() *Chunk {
 		clone.biomes[i] = biomes.Clone()
 	}
 	return clone
+}
+
+// Snapshot returns a copy of the Chunk that shares its sub chunks and
+// biomes with it until either side writes to one: the writer then copies
+// that section first. A snapshot costs one slice per field, so a chunk can
+// be handed to another goroutine to encode or save while its owner keeps
+// changing it; only the sections changed afterwards are ever copied. The
+// two may be used from different goroutines, each by one at a time.
+func (chunk *Chunk) Snapshot() *Chunk {
+	if chunk.shared == nil {
+		chunk.shared = make([]uint8, len(chunk.sub))
+	}
+	for i := range chunk.shared {
+		chunk.shared[i] = sharedSub | sharedBiome
+	}
+	s := *chunk
+	s.sub = slices.Clone(chunk.sub)
+	s.biomes = slices.Clone(chunk.biomes)
+	s.heightMap = slices.Clone(chunk.heightMap)
+	s.shared = slices.Clone(chunk.shared)
+	return &s
+}
+
+// WritableSub returns the sub chunk at index for writing, copying it first
+// if a Snapshot shares it. Write to sub chunks only through it (or the
+// Chunk's own setters); Sub and SubChunk are for reading.
+func (chunk *Chunk) WritableSub(index int) *SubChunk {
+	if chunk.shared != nil && chunk.shared[index]&sharedSub != 0 {
+		chunk.sub[index] = chunk.sub[index].Clone()
+		chunk.shared[index] &^= sharedSub
+	}
+	return chunk.sub[index]
+}
+
+// writableBiomes returns the biome storage at index for writing, copying it
+// first if a Snapshot shares it.
+func (chunk *Chunk) writableBiomes(index int) *PalettedStorage {
+	if chunk.shared != nil && chunk.shared[index]&sharedBiome != 0 {
+		chunk.biomes[index] = chunk.biomes[index].Clone()
+		chunk.shared[index] &^= sharedBiome
+	}
+	return chunk.biomes[index]
+}
+
+// ReplaceBiomes replaces every biome ID b with f(b), as when saved biomes
+// were deleted from the server.
+func (chunk *Chunk) ReplaceBiomes(f func(b uint32) uint32) {
+	for i, b := range chunk.biomes {
+		changed := false
+		for _, v := range b.palette.values {
+			if f(v) != v {
+				changed = true
+				break
+			}
+		}
+		if changed {
+			chunk.writableBiomes(i).palette.Replace(f)
+		}
+	}
 }
 
 // Equals returns if the chunk passed is equal to the current one
@@ -139,12 +206,13 @@ func (chunk *Chunk) Block(x uint8, y int16, z uint8, layer uint8) uint32 {
 // SetBlock sets the runtime ID of a block at a given x, y and z in a chunk at the given layer. If no
 // SubChunk exists at the given y, a new SubChunk is created and the block is set.
 func (chunk *Chunk) SetBlock(x uint8, y int16, z uint8, layer uint8, block uint32) {
-	sub := chunk.sub[chunk.SubIndex(y)]
-	if uint8(len(sub.storages)) <= layer && block == chunk.air {
+	i := int(chunk.SubIndex(y))
+	if uint8(len(chunk.sub[i].storages)) <= layer && block == chunk.air {
 		// Air was set at n layer, but there were less than n layers, so there already was air there.
 		// Don't do anything with this, just return.
 		return
 	}
+	sub := chunk.WritableSub(i)
 	sub.Layer(layer).Set(x, uint8(y), z, block)
 	chunk.recalculateHeightMap = true
 }
@@ -156,7 +224,7 @@ func (chunk *Chunk) Biome(x uint8, y int16, z uint8) uint32 {
 
 // SetBiome sets the biome ID at a specific column in the chunk.
 func (chunk *Chunk) SetBiome(x uint8, y int16, z uint8, biome uint32) {
-	chunk.biomes[chunk.SubIndex(y)].Set(x, uint8(y), z, biome)
+	chunk.writableBiomes(int(chunk.SubIndex(y))).Set(x, uint8(y), z, biome)
 }
 
 // Light returns the light level at a specific position in the chunk.
@@ -246,6 +314,9 @@ func (chunk *Chunk) HeightMap() HeightMap {
 // Compact should be called right before the chunk is saved in order to optimise the storage space.
 func (chunk *Chunk) Compact() {
 	for i := range chunk.sub {
+		if chunk.shared != nil && chunk.shared[i]&sharedSub != 0 {
+			continue // compacting would change a sub chunk a snapshot reads
+		}
 		chunk.sub[i].compact()
 	}
 }

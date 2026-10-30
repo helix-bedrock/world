@@ -131,7 +131,8 @@ func (a *lightArea) light(pos cube.Pos, l light) uint8 {
 
 // light sets the light at a cube.Pos with the light type l.
 func (a *lightArea) setLight(pos cube.Pos, l light, v uint8) {
-	l.setLight(a.sub(pos), uint8(pos[0]&0xf), uint8(pos[1]&0xf), uint8(pos[2]&0xf), v)
+	c := a.chunk(pos)
+	l.setLight(c.WritableSub(int(c.SubIndex(int16(pos[1])))), uint8(pos[0]&0xf), uint8(pos[1]&0xf), uint8(pos[2]&0xf), v)
 }
 
 // iterSubChunks iterates over all blocks of the lightArea on a per-SubChunk basis. A filter function may be passed to
@@ -256,11 +257,11 @@ func (a *lightArea) initialiseLightSlices() {
 	for _, c := range a.c {
 		index := len(c.sub) - 1
 		for index >= 0 {
-			sub := c.sub[index]
-			if !sub.Empty() {
+			if !c.sub[index].Empty() {
 				// We've hit the topmost empty SubChunk.
 				break
 			}
+			sub := c.WritableSub(index)
 			sub.skyLight = fullLight
 			sub.blockLight = noLight
 			index--
@@ -268,8 +269,9 @@ func (a *lightArea) initialiseLightSlices() {
 		for index >= 0 {
 			// Fill up the rest of the sub chunks with empty light. We will do light calculation for these sub chunks
 			// later on.
-			c.sub[index].skyLight = noLight
-			c.sub[index].blockLight = noLight
+			sub := c.WritableSub(index)
+			sub.skyLight = noLight
+			sub.blockLight = noLight
 			index--
 		}
 	}

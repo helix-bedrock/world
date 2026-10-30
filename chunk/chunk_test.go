@@ -61,14 +61,19 @@ func (r *testRegistry) StateToRuntimeID(name string, props map[string]any) (uint
 	id, ok := r.ids[stateKey(name, props)]
 	return id, ok
 }
-func (r *testRegistry) FilteringBlock(uint32) uint8           { return 0 }
-func (r *testRegistry) LightBlock(uint32) uint8               { return 0 }
-func (r *testRegistry) RandomTickBlock(uint32) bool           { return false }
-func (r *testRegistry) NBTBlock(uint32) bool                  { return false }
-func (r *testRegistry) LiquidDisplacingBlock(uint32) bool     { return false }
-func (r *testRegistry) LiquidBlock(uint32) bool               { return false }
-func (r *testRegistry) HashToRuntimeID(uint32) (uint32, bool) { return 0, false }
-func (r *testRegistry) RuntimeIDToHash(uint32) (uint32, bool) { return 0, false }
+func (r *testRegistry) FilteringBlock(uint32) uint8       { return 0 }
+func (r *testRegistry) LightBlock(uint32) uint8           { return 0 }
+func (r *testRegistry) RandomTickBlock(uint32) bool       { return false }
+func (r *testRegistry) NBTBlock(uint32) bool              { return false }
+func (r *testRegistry) LiquidDisplacingBlock(uint32) bool { return false }
+func (r *testRegistry) LiquidBlock(uint32) bool           { return false }
+func (r *testRegistry) HashToRuntimeID(h uint32) (uint32, bool) {
+	return h ^ testHashMask, int(h^testHashMask) < len(r.names)
+}
+func (r *testRegistry) RuntimeIDToHash(id uint32) (uint32, bool) { return id ^ testHashMask, true }
+
+// testHashMask makes the test registry's network hashes differ from its IDs.
+const testHashMask = 0xdead0000
 
 var testRange = cube.Range{-64, 319}
 
@@ -243,4 +248,63 @@ func FuzzNetworkDecode(f *testing.F) {
 		}
 		_, _ = NetworkDecode(br, b, count, testRange)
 	})
+}
+
+// TestSnapshot checks that a snapshot keeps what the chunk held when it was
+// taken, and that only the section written afterwards is copied.
+func TestSnapshot(t *testing.T) {
+	c := New(newTestRegistry(), cube.Range{-64, 319})
+	c.SetBlock(1, 2, 3, 0, 5)
+	c.SetBiome(0, 0, 0, 7)
+	s := c.Snapshot()
+	c.SetBlock(1, 2, 3, 0, 6)
+	c.SetBiome(0, 0, 0, 8)
+	if got := s.Block(1, 2, 3, 0); got != 5 {
+		t.Fatalf("snapshot block = %d, want 5", got)
+	}
+	if got := s.Biome(0, 0, 0); got != 7 {
+		t.Fatalf("snapshot biome = %d, want 7", got)
+	}
+	if got := c.Block(1, 2, 3, 0); got != 6 {
+		t.Fatalf("chunk block = %d, want 6", got)
+	}
+	i := c.SubIndex(2)
+	if c.Sub()[i] == s.Sub()[i] {
+		t.Fatal("written sub chunk still shared")
+	}
+	if c.Sub()[i+1] != s.Sub()[i+1] {
+		t.Fatal("untouched sub chunk was copied")
+	}
+	s.SetBlock(1, 40, 3, 0, 9)
+	if got := c.Block(1, 40, 3, 0); got == 9 {
+		t.Fatal("write to snapshot reached the chunk")
+	}
+}
+
+// TestNetworkHashEncoding checks that block palettes go out as hashes and
+// come back as runtime IDs, and that biome palettes are left alone.
+func TestNetworkHashEncoding(t *testing.T) {
+	br := newTestRegistry()
+	p := &Palette{values: []uint32{0, 1, 2}, size: 2}
+	buf := new(bytes.Buffer)
+	NetworkHashEncoding.encodePalette(buf, p, BlockPaletteEncoding{Blocks: br})
+	plain := new(bytes.Buffer)
+	NetworkEncoding.encodePalette(plain, p, BlockPaletteEncoding{Blocks: br})
+	if bytes.Equal(buf.Bytes(), plain.Bytes()) {
+		t.Fatal("block palette written as runtime IDs")
+	}
+	got, err := NetworkHashEncoding.decodePalette(buf, 2, BlockPaletteEncoding{Blocks: br})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got.values) != fmt.Sprint(p.values) {
+		t.Fatalf("decoded %v, want %v", got.values, p.values)
+	}
+	buf.Reset()
+	plain.Reset()
+	NetworkHashEncoding.encodePalette(buf, p, BiomePaletteEncoding)
+	NetworkEncoding.encodePalette(plain, p, BiomePaletteEncoding)
+	if !bytes.Equal(buf.Bytes(), plain.Bytes()) {
+		t.Fatal("biome palette changed")
+	}
 }
