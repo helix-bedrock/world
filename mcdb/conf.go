@@ -33,6 +33,10 @@ type Config struct {
 	// Upgrader upgrades block states saved by older versions. If nil, Open
 	// creates one.
 	Upgrader *chunk.Upgrader
+	// KV is the key-value store the world is kept in. If nil, the LevelDB
+	// database in the world folder is used, as BDS does. level.dat is
+	// always read from and written to the world folder.
+	KV KV
 	// FlushInterval is how often buffered writes are written to LevelDB as
 	// one batch. Zero means DefaultFlushInterval; negative means only Flush
 	// and Close write them.
@@ -93,14 +97,17 @@ func (conf Config) Open(dir string) (*DB, error) {
 		}
 		db.ldatFile = ldat
 	}
-	ldb, err := leveldb.OpenFile(filepath.Join(dir, "db"), &ldbOpts)
-	if err != nil {
-		return nil, fmt.Errorf("open db: leveldb: %w", err)
+	if conf.KV == nil {
+		ldb, err := leveldb.OpenFile(filepath.Join(dir, "db"), &ldbOpts)
+		if err != nil {
+			return nil, fmt.Errorf("open db: leveldb: %w", err)
+		}
+		db.conf.KV = levelDB{db: ldb}
 	}
-	db.ldb = ldb
-	db.buf = newWriteBuffer(ldb)
+	db.kv = db.conf.KV
+	db.buf = newWriteBuffer(db.kv)
 	db.meta = newMetaDictionary()
-	if b, err := ldb.Get([]byte(keyChunkMetaData), nil); err == nil {
+	if b, err := db.kv.Get([]byte(keyChunkMetaData)); err == nil {
 		meta, err := decodeMetaDictionary(b)
 		if err != nil {
 			// Keep what decoded; chunks pointing at the rest keep their hash.
@@ -108,7 +115,7 @@ func (conf Config) Open(dir string) (*DB, error) {
 		}
 		db.meta = meta
 	} else if !errors.Is(err, leveldb.ErrNotFound) {
-		_ = ldb.Close()
+		_ = db.kv.Close()
 		return nil, fmt.Errorf("open db: read chunk metadata: %w", err)
 	}
 	if conf.FlushInterval == 0 {

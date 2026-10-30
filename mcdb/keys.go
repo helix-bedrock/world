@@ -66,6 +66,36 @@ const (
 	keyEntity = "actorprefix"
 )
 
+// Chunk tags kept raw in chunk.Column.Extra.
+const (
+	// keyBiomeStates holds per-biome state values (snow accumulation).
+	keyBiomeStates = '5' // 35
+	// keyBorderBlocks holds a count and the column indices of border blocks.
+	keyBorderBlocks = '8' // 38
+	// keyHardcodedSpawners holds bounding boxes of structure spawn areas.
+	// BDS reads it but no longer writes it.
+	keyHardcodedSpawners = '9' // 39
+	// keyRandomTicks holds pending random ticks as {currentTick, tickList}.
+	keyRandomTicks = ':' // 3a
+	// keyTag3C is an int32 BDS reads but never writes; meaning unknown.
+	keyTag3C = '<' // 3c
+	// keyTag3D is a bool BDS reads but never writes; meaning unknown.
+	keyTag3D = '=' // 3d
+	// keyStructureStarts holds the structure starts in the chunk.
+	keyStructureStarts = 'w' // 77
+	// keyListeners holds game event listeners as NBT.
+	keyListeners = 'y' // 79
+	// keyNamedTicks holds named tick events as NBT.
+	keyNamedTicks = 'z' // 7a
+)
+
+// extraChunkTags are read into chunk.Column.Extra.
+var extraChunkTags = [...]byte{keyBiomeStates, keyBorderBlocks, keyHardcodedSpawners, keyRandomTicks, keyTag3C, keyTag3D, keyStructureStarts, keyListeners, keyNamedTicks}
+
+// deletedWhenAbsent are the Extra tags BDS deletes on save when the chunk
+// has none; it never deletes the others.
+var deletedWhenAbsent = [...]byte{keyBiomeStates, keyBorderBlocks, keyRandomTicks, keyStructureStarts, keyListeners, keyNamedTicks}
+
 // legacyChunkTags are deleted every time BDS saves a chunk.
 var legacyChunkTags = [...]byte{key2DData, key2DDataLegacy, keyLegacyTerrain, keyEntitiesOld, keyBlockExtraData, keyConversionData, keyChecksums}
 

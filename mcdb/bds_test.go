@@ -91,7 +91,7 @@ func TestStoredKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Nothing reaches LevelDB before a flush, but reads see it.
-	if _, err := db.ldb.Get(k.Sum(keyVersion), nil); !errors.Is(err, leveldb.ErrNotFound) {
+	if _, err := db.kv.Get(k.Sum(keyVersion)); !errors.Is(err, leveldb.ErrNotFound) {
 		t.Fatalf("written before flush: %v", err)
 	}
 	if _, err := db.LoadColumn(k.pos, k.dim); err != nil {
@@ -109,21 +109,21 @@ func TestStoredKeys(t *testing.T) {
 		keyActorDigestVersion: {0},
 	}
 	for tag, v := range want {
-		got, err := db.ldb.Get(k.Sum(tag), nil)
+		got, err := db.kv.Get(k.Sum(tag))
 		if err != nil || !bytes.Equal(got, v) {
 			t.Errorf("tag %q: %x, %v; want %x", tag, got, err, v)
 		}
 	}
 	for _, tag := range []byte{keyBlockEntities, keyLegacyStates} {
-		if _, err := db.ldb.Get(k.Sum(tag), nil); !errors.Is(err, leveldb.ErrNotFound) {
+		if _, err := db.kv.Get(k.Sum(tag)); !errors.Is(err, leveldb.ErrNotFound) {
 			t.Errorf("tag %q written", tag)
 		}
 	}
 	// BDS keeps an empty digp record for a chunk without entities.
-	if v, err := db.ldb.Get(append([]byte(keyEntityIdentifiers), index(k.pos, k.dim)...), nil); err != nil || len(v) != 0 {
+	if v, err := db.kv.Get(append([]byte(keyEntityIdentifiers), index(k.pos, k.dim)...)); err != nil || len(v) != 0 {
 		t.Errorf("digp: %x, %v", v, err)
 	}
-	if _, err := db.ldb.Get([]byte(keyChunkMetaData), nil); err != nil {
+	if _, err := db.kv.Get([]byte(keyChunkMetaData)); err != nil {
 		t.Errorf("metadata dictionary: %v", err)
 	}
 }
@@ -165,5 +165,110 @@ func TestHeightMapAndBiomeMarkers(t *testing.T) {
 	}
 	if want := len(c.Sub()) - 5; markers != want {
 		t.Fatalf("%d copy markers, want %d", markers, want)
+	}
+}
+
+func TestExtraTags(t *testing.T) {
+	db := openTest(t, t.TempDir())
+	defer func() { _ = db.Close() }()
+	col := testColumn(Overworld, 0)
+	col.Extra = map[byte][]byte{keyRandomTicks: {1, 2, 3}, keyTag3C: {4, 0, 0, 0}, keyVersion: {9}}
+	if err := db.StoreColumn(ChunkPos{}, Overworld, col); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.LoadColumn(ChunkPos{}, Overworld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Extra[keyRandomTicks], []byte{1, 2, 3}) || len(got.Extra[keyTag3C]) != 4 {
+		t.Fatalf("extra: %v", got.Extra)
+	}
+	if _, ok := got.Extra[keyVersion]; ok {
+		t.Fatal("a decoded tag went through Extra")
+	}
+	// Random ticks are deleted once gone; the unknown int32 is left alone.
+	got.Extra = nil
+	if err := db.StoreColumn(ChunkPos{}, Overworld, got); err != nil {
+		t.Fatal(err)
+	}
+	k := dbKey{}
+	if ok, _ := db.buf.has(k.Sum(keyRandomTicks)); ok {
+		t.Fatal("random ticks not deleted")
+	}
+	if ok, _ := db.buf.has(k.Sum(keyTag3C)); !ok {
+		t.Fatal("unknown tag deleted")
+	}
+}
+
+func TestPlayers(t *testing.T) {
+	dir := t.TempDir()
+	db := openTest(t, dir)
+	ids := PlayerIDs{MsaID: "f6fd757b-28a5-3909-95c5-68755bae7c36", SelfSignedID: "1f021143-32a7-3bcd-83eb-292470ab454f"}
+	if _, ok, err := db.LoadPlayer(ids); ok || err != nil {
+		t.Fatalf("unknown player: %v %v", ok, err)
+	}
+	if err := db.StorePlayer(ids, map[string]any{"SpawnX": int32(5)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StorePlayer(ids, map[string]any{"SpawnX": int32(6)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = openTest(t, dir)
+	defer func() { _ = db.Close() }()
+	// Either ID finds the player.
+	for _, id := range []PlayerIDs{{SelfSignedID: ids.SelfSignedID}, {MsaID: ids.MsaID}} {
+		data, ok, err := db.LoadPlayer(id)
+		if err != nil || !ok || data["SpawnX"] != int32(6) {
+			t.Fatalf("load %+v: %v %v %v", id, data, ok, err)
+		}
+	}
+	// Both lookup records point at one random player_server_ key.
+	a, _ := db.LoadLevel("player_" + ids.MsaID)
+	b, _ := db.LoadLevel("player_" + ids.SelfSignedID)
+	if !bytes.Equal(a, b) || bytes.Contains(a, []byte("player_server_"+ids.MsaID)) {
+		t.Fatalf("lookup records: %q %q", a, b)
+	}
+	n := 0
+	if err := db.ForEachLevel("player_server_", func(string, []byte) bool { n++; return true }); err != nil || n != 1 {
+		t.Fatalf("%d player records, %v", n, err)
+	}
+}
+
+func TestLevelKeys(t *testing.T) {
+	db := openTest(t, t.TempDir())
+	defer func() { _ = db.Close() }()
+	if err := db.StoreLevel(LevelKeyScoreboard, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := db.LoadLevel(LevelKeyScoreboard); err != nil || !bytes.Equal(v, []byte{1}) {
+		t.Fatalf("load: %x %v", v, err)
+	}
+	if err := db.DeleteLevel(LevelKeyScoreboard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.LoadLevel(LevelKeyScoreboard); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted key: %v", err)
+	}
+	if err := db.StoreLevel("abcdefgh,", nil); err == nil {
+		t.Fatal("chunk-shaped key accepted")
+	}
+}
+
+func TestNamespace(t *testing.T) {
+	db := openTest(t, t.TempDir())
+	defer func() { _ = db.Close() }()
+	a, b := db.Namespace("a"), db.Namespace("b")
+	if err := a.Set("k", []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Get("k"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("namespaces collide: %v", err)
+	}
+	var keys []string
+	if err := a.ForEach("", func(k string, _ []byte) bool { keys = append(keys, k); return true }); err != nil || len(keys) != 1 || keys[0] != "k" {
+		t.Fatalf("for each: %v %v", keys, err)
 	}
 }

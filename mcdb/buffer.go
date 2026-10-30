@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
-	"github.com/helix-bedrock/world/leveldb"
 )
 
 // DefaultFlushInterval returns how often pending writes reach LevelDB: BDS
@@ -25,7 +23,7 @@ type pendingValue struct {
 // one LevelDB batch. Reads check it first, so a value is visible as soon as
 // it is stored. Safe for concurrent use.
 type writeBuffer struct {
-	ldb *leveldb.DB
+	kv KV
 	// flushMu lets one flush run at a time.
 	flushMu sync.Mutex
 	mu      sync.Mutex
@@ -35,8 +33,8 @@ type writeBuffer struct {
 	flushing map[string]pendingValue
 }
 
-func newWriteBuffer(ldb *leveldb.DB) *writeBuffer {
-	return &writeBuffer{ldb: ldb, pending: map[string]pendingValue{}}
+func newWriteBuffer(kv KV) *writeBuffer {
+	return &writeBuffer{kv: kv, pending: map[string]pendingValue{}}
 }
 
 // txn is a set of writes applied to the buffer at once, so a flush never
@@ -66,7 +64,7 @@ func (w *writeBuffer) apply(t *txn) {
 }
 
 // get returns the value of key, buffered or on disk. A missing key gives
-// leveldb.ErrNotFound.
+// ErrNotFound.
 func (w *writeBuffer) get(key []byte) ([]byte, error) {
 	w.mu.Lock()
 	v, ok := w.pending[string(key)]
@@ -76,17 +74,17 @@ func (w *writeBuffer) get(key []byte) ([]byte, error) {
 	w.mu.Unlock()
 	if ok {
 		if v.deleted {
-			return nil, leveldb.ErrNotFound
+			return nil, ErrNotFound
 		}
 		return v.data, nil
 	}
-	return w.ldb.Get(key, nil)
+	return w.kv.Get(key)
 }
 
 // has reports whether key exists, buffered or on disk.
 func (w *writeBuffer) has(key []byte) (bool, error) {
 	_, err := w.get(key)
-	if errors.Is(err, leveldb.ErrNotFound) {
+	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
 	return err == nil, err
@@ -111,15 +109,11 @@ func (w *writeBuffer) flush(extra *txn) error {
 	w.flushing, w.pending = w.pending, map[string]pendingValue{}
 	w.mu.Unlock()
 
-	batch := leveldb.MakeBatch(len(w.flushing))
+	writes := make([]KVWrite, 0, len(w.flushing))
 	for k, v := range w.flushing {
-		if v.deleted {
-			batch.Delete([]byte(k))
-		} else {
-			batch.Put([]byte(k), v.data)
-		}
+		writes = append(writes, KVWrite{Key: []byte(k), Value: v.data, Delete: v.deleted})
 	}
-	err := w.ldb.Write(batch, nil)
+	err := w.kv.Write(writes)
 
 	w.mu.Lock()
 	if err != nil {

@@ -32,10 +32,11 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
 - `chunk`: chunks, sub chunks, palettes and paletted storage; disk and network
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.
-- `mcdb`: the world provider. Keys in `keys.go`, chunk/entity/block entity
-  storage in `db.go`, the 5-second write buffer in `buffer.go`, chunk
-  metadata (`?` keys and their dictionary) in `meta.go`, the column iterator,
-  players.
+- `mcdb`: the world provider. Chunk tags and actor keys in `keys.go`, level
+  keys in `levelkeys.go`, chunk/entity/block entity storage in `db.go`, the
+  5-second write buffer in `buffer.go`, chunk metadata in `meta.go`, height
+  maps in `heightmap.go`, players in `player.go`, the `KV`/`WorldStore`/
+  `PlayerStore` interfaces and plugin namespaces in `store.go`.
 - `mcdb/leveldat`: `level.dat` reading and writing.
 - `cube`: `Pos`, `Range` and `Face`, shared by the packages above.
 
@@ -56,10 +57,10 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
 5. Unknown `level.dat` fields are kept and written back unchanged.
 6. Never import the engine or `helix-api`.
 7. Storage is one-to-one with BDS (currently 1.26.60): every key BDS writes,
-   its format and how BDS reads it. Next work (Helix build step 1, see the
-   "Engine design" section of `../.github/API_DESIGN.md`): a full key
-   inventory checked against BDS, and pluggable world and player stores with
-   LevelDB as the default.
+   its format and how BDS reads it. Check changes by round-tripping a world
+   BDS saved (load every column, store it, compare every key byte for byte)
+   and regenerate the key map with the `dump-storage-keys` skill on a new
+   BDS version.
 
 ## Gotchas
 

@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/helix-bedrock/world/chunk"
-	"github.com/helix-bedrock/world/leveldb/iterator"
 )
 
 // ColumnIterator iterates over a DB's position/column pairs in key order.
@@ -23,7 +22,7 @@ import (
 // safe to use multiple iterators concurrently, with each in a dedicated
 // goroutine.
 type ColumnIterator struct {
-	dbIter iterator.Iterator
+	dbIter KVIterator
 	db     *DB
 	r      *IteratorRange
 
@@ -38,7 +37,7 @@ type ColumnIterator struct {
 func newColumnIterator(db *DB, r *IteratorRange) *ColumnIterator {
 	return &ColumnIterator{
 		db:     db,
-		dbIter: db.ldb.NewIterator(nil, nil),
+		dbIter: db.kv.NewIterator(nil),
 		seen:   make(map[dbKey]struct{}),
 		r:      r,
 	}

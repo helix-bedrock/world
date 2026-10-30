@@ -3,7 +3,7 @@
 Minecraft: Bedrock Edition worlds for Go: the LevelDB database, chunks, block
 state upgrading and `level.dat`. Worlds it saves open in BDS and in the game.
 
-**Status as of 2026-10-29:** in development. A world BDS 1.26.60 saved loads and saves back byte for byte (chunk metadata, heightmaps, biome markers, actor keys, 5-second batches); level keys and pluggable stores are next. Byte-identical NBT needs the sorted-keys fix in `protocol`.
+**Status as of 2026-10-29:** in development. Storage is one-to-one with BDS 1.26.60: a world BDS saved loads and saves back byte for byte, and stores are pluggable (`KV`, `WorldStore`, `PlayerStore`). Byte-identical NBT needs the sorted-keys fix in `protocol`.
 
 Part of [Helix](https://github.com/helix-bedrock), an open-source Minecraft: Bedrock
 Edition server engine in Go. It does not depend on the engine and can be used on
@@ -16,7 +16,7 @@ its own.
 | `leveldb` | LevelDB with Bedrock's zlib and raw deflate compression (goleveldb with fixes, no panics) |
 | `chunk` | Chunks and sub chunks in memory, palettes, block storage, disk and network encoding |
 | `blockupgrader` | Upgrades block states saved by older Bedrock versions (pmmp's upgrade schemas) |
-| `mcdb` | The world provider: chunk, entity and block entity keys, players, iterating a world |
+| `mcdb` | The world provider, one-to-one with BDS 1.26.60: chunks, entities, block entities, chunk metadata, level keys, players, plugin namespaces, 5-second batched writes; pluggable through `KV`, `WorldStore` and `PlayerStore` |
 | `mcdb/leveldat` | Reading and writing `level.dat`, keeping fields it does not know |
 | `cube` | Block positions, height ranges and faces |
 

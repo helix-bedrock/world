@@ -184,27 +184,6 @@ func TestStoreReplacesEntities(t *testing.T) {
 	}
 }
 
-func TestPlayerSpawn(t *testing.T) {
-	dir := t.TempDir()
-	db := openTest(t, dir)
-	const id = "4a2f3b1c-0000-4000-8000-000000000001"
-	if _, ok, err := db.LoadPlayerSpawnPosition(id); ok || err != nil {
-		t.Fatalf("unknown player: ok=%v err=%v", ok, err)
-	}
-	for _, pos := range []cube.Pos{{1, 70, -3}, {5, 64, 9}} {
-		if err := db.SavePlayerSpawnPosition(id, pos); err != nil {
-			t.Fatal(err)
-		}
-		got, ok, err := db.LoadPlayerSpawnPosition(id)
-		if err != nil || !ok || got != pos {
-			t.Fatalf("got %v %v %v, want %v", got, ok, err, pos)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestLevelDatSaved(t *testing.T) {
 	dir := t.TempDir()
 	db := openTest(t, dir)
@@ -230,7 +209,7 @@ func TestCorruptEntityIDs(t *testing.T) {
 	if err := db.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ldb.Put(key, []byte{1, 2, 3}, nil); err != nil {
+	if err := db.kv.Write([]KVWrite{{Key: key, Value: []byte{1, 2, 3}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.LoadColumn(ChunkPos{}, Overworld); err == nil {

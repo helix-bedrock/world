@@ -37,7 +37,7 @@ import (
 // Close must not run concurrently with anything else.
 type DB struct {
 	conf Config
-	ldb  *leveldb.DB
+	kv   KV
 	buf  *writeBuffer
 	meta *metaDictionary
 	dir  string
@@ -96,85 +96,6 @@ func (db *DB) Flush() error {
 		}
 		return fmt.Errorf("mcdb: %w", err)
 	}
-	return nil
-}
-
-// playerData holds the fields that indicate where player data is stored for a player with a specific UUID.
-type playerData struct {
-	UUID         string `nbt:"MsaId"`
-	ServerID     string `nbt:"ServerId"`
-	SelfSignedID string `nbt:"SelfSignedId"`
-}
-
-// LoadPlayerSpawnPosition loads the players spawn position stored in the level.dat from their UUID.
-// The id is the player's UUID in its usual text form.
-func (db *DB) LoadPlayerSpawnPosition(id string) (pos cube.Pos, exists bool, err error) {
-	serverData, _, exists, err := db.loadPlayerData(id)
-	if !exists || err != nil {
-		return cube.Pos{}, exists, err
-	}
-	x, okX := serverData["SpawnX"].(int32)
-	y, okY := serverData["SpawnY"].(int32)
-	z, okZ := serverData["SpawnZ"].(int32)
-	if !okX || !okY || !okZ {
-		return cube.Pos{}, true, fmt.Errorf("error reading spawn fields from server data for player %v", id)
-	}
-	return cube.Pos{int(x), int(y), int(z)}, true, nil
-}
-
-// loadPlayerData loads the data stored in a LevelDB database for a specific UUID.
-func (db *DB) loadPlayerData(id string) (serverData map[string]any, key string, exists bool, err error) {
-	data, err := db.buf.get([]byte("player_" + id))
-	if errors.Is(err, leveldb.ErrNotFound) {
-		return nil, "", false, nil
-	} else if err != nil {
-		return nil, "", true, fmt.Errorf("error reading player data for uuid %v: %w", id, err)
-	}
-
-	var d playerData
-	if err := nbt.UnmarshalEncoding(data, &d, nbt.LittleEndian); err != nil {
-		return nil, "", true, fmt.Errorf("error decoding player data for uuid %v: %w", id, err)
-	}
-	if d.UUID != id || d.ServerID == "" {
-		return nil, d.ServerID, true, fmt.Errorf("invalid player data for uuid %v: %v", id, d)
-	}
-	serverDB, err := db.buf.get([]byte(d.ServerID))
-	if err != nil {
-		return nil, d.ServerID, true, fmt.Errorf("error reading server data for player %v (%v): %w", id, d.ServerID, err)
-	}
-
-	if err := nbt.UnmarshalEncoding(serverDB, &serverData, nbt.LittleEndian); err != nil {
-		return nil, d.ServerID, true, fmt.Errorf("error decoding server data for player %v", id)
-	}
-	return serverData, d.ServerID, true, nil
-}
-
-// SavePlayerSpawnPosition saves the player spawn position passed to the levelDB database.
-func (db *DB) SavePlayerSpawnPosition(id string, pos cube.Pos) error {
-	_, err := db.buf.get([]byte("player_" + id))
-	d := make(map[string]any)
-	k := "player_server_" + id
-	t := &txn{}
-
-	if errors.Is(err, leveldb.ErrNotFound) {
-		data, err := nbt.MarshalEncoding(playerData{UUID: id, ServerID: k}, nbt.LittleEndian)
-		if err != nil {
-			return fmt.Errorf("encode player data (uuid=%v): %w", id, err)
-		}
-		t.Put([]byte("player_"+id), data)
-	} else if err != nil {
-		return fmt.Errorf("read player data (uuid=%v): %w", id, err)
-	} else if d, k, _, err = db.loadPlayerData(id); err != nil {
-		return err
-	}
-	d["SpawnX"], d["SpawnY"], d["SpawnZ"] = int32(pos.X()), int32(pos.Y()), int32(pos.Z()) //nolint:gosec // block coordinates fit in int32
-
-	data, err := nbt.MarshalEncoding(d, nbt.LittleEndian)
-	if err != nil {
-		return fmt.Errorf("encode server data for player %v: %w", id, err)
-	}
-	t.Put([]byte(k), data)
-	db.buf.apply(t)
 	return nil
 }
 
@@ -238,6 +159,9 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	}
 	if col.MetaDataHash, col.BlendingData, err = db.metaData(k); err != nil {
 		return nil, fmt.Errorf("read metadata: %w", err)
+	}
+	if col.Extra, err = db.extraTags(k); err != nil {
+		return nil, fmt.Errorf("read chunk keys: %w", err)
 	}
 	col.Entities, err = db.entities(k, ver)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
@@ -488,6 +412,7 @@ func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 		t.Delete(k.Sum(tag))
 	}
 	db.storeLegacyStates(t, k, col.Chunk.LegacyStates())
+	db.storeExtraTags(t, k, col.Extra)
 	db.storeEntities(t, k, col.Entities)
 	db.storeBlockEntities(t, k, col.BlockEntities)
 	db.storeScheduledUpdates(t, k, col.Tick, col.ScheduledBlocks)
@@ -647,7 +572,7 @@ func (db *DB) Close() error {
 		errs = append(errs, fmt.Errorf("close: write levelname.txt: %w", err))
 	}
 	// Always close the database, even if level.dat could not be saved.
-	if err := db.ldb.Close(); err != nil {
+	if err := db.kv.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close: leveldb: %w", err))
 	}
 	return errors.Join(errs...)
@@ -686,4 +611,37 @@ func blockPosFromNBT(data map[string]any) cube.Pos {
 	y, _ := data["y"].(int32)
 	z, _ := data["z"].(int32)
 	return cube.Pos{int(x), int(y), int(z)}
+}
+
+// extraTags reads the chunk keys kept raw in Column.Extra. Nil if the chunk
+// has none.
+func (db *DB) extraTags(k dbKey) (map[byte][]byte, error) {
+	var extra map[byte][]byte
+	for _, tag := range extraChunkTags {
+		v, err := db.buf.get(k.Sum(tag))
+		if errors.Is(err, leveldb.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tag %q: %w", tag, err)
+		}
+		if extra == nil {
+			extra = map[byte][]byte{}
+		}
+		extra[tag] = slices.Clone(v)
+	}
+	return extra, nil
+}
+
+// storeExtraTags writes Column.Extra back and deletes the tags BDS deletes
+// when a chunk has none of them. Tags this package decodes itself are
+// ignored, so Extra cannot overwrite them.
+func (db *DB) storeExtraTags(t *txn, k dbKey, extra map[byte][]byte) {
+	for _, tag := range extraChunkTags {
+		if v, ok := extra[tag]; ok {
+			t.Put(k.Sum(tag), v)
+		} else if slices.Contains(deletedWhenAbsent[:], tag) {
+			t.Delete(k.Sum(tag))
+		}
+	}
 }
