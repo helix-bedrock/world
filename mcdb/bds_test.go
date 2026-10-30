@@ -272,3 +272,30 @@ func TestNamespace(t *testing.T) {
 		t.Fatalf("for each: %v %v", keys, err)
 	}
 }
+
+// TestNoBlocks checks a DB opened without a block registry: level keys and
+// players work, column calls return ErrNoBlocks.
+func TestNoBlocks(t *testing.T) {
+	db, err := Config{FlushInterval: -1}.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.StoreLevel(LevelKeyScoreboard, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StorePlayer(PlayerIDs{SelfSignedID: "a"}, map[string]any{"Pos": []any{float32(1)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.LoadColumn(ChunkPos{}, 0); !errors.Is(err, ErrNoBlocks) {
+		t.Fatalf("LoadColumn: %v, want ErrNoBlocks", err)
+	}
+	if err := db.StoreColumn(ChunkPos{}, 0, &chunk.Column{}); !errors.Is(err, ErrNoBlocks) {
+		t.Fatalf("StoreColumn: %v, want ErrNoBlocks", err)
+	}
+	it := db.NewColumnIterator(nil)
+	defer it.Release()
+	if it.Next() || !errors.Is(it.Error(), ErrNoBlocks) {
+		t.Fatalf("iterator: %v, want ErrNoBlocks", it.Error())
+	}
+}

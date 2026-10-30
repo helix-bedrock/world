@@ -50,7 +50,7 @@ type DB struct {
 }
 
 // Open opens the world in dir with the block registry passed and default
-// options. See Config.Open.
+// options. blocks may be nil; see Config.Blocks.
 func Open(dir string, blocks chunk.BlockRegistry) (*DB, error) {
 	return Config{Blocks: blocks}.Open(dir)
 }
@@ -99,9 +99,16 @@ func (db *DB) Flush() error {
 	return nil
 }
 
+// ErrNoBlocks is returned by column calls on a DB opened without
+// Config.Blocks.
+var ErrNoBlocks = errors.New("no block registry: Config.Blocks is not set")
+
 // LoadColumn reads the column at a position in a dimension. If no column
 // exists there, errors.Is(err, leveldb.ErrNotFound) is true.
 func (db *DB) LoadColumn(pos ChunkPos, dim Dimension) (*chunk.Column, error) {
+	if db.conf.Blocks == nil {
+		return nil, fmt.Errorf("load column %v: %w", pos, ErrNoBlocks)
+	}
 	if _, ok := dim.Range(); !ok {
 		return nil, fmt.Errorf("load column %v: unknown dimension %v", pos, dim)
 	}
@@ -373,6 +380,9 @@ func (db *DB) scheduledUpdates(k dbKey) ([]chunk.ScheduledBlockUpdate, int64, er
 // buffered and reaches LevelDB with the next flush, in one batch with
 // everything else stored until then.
 func (db *DB) StoreColumn(pos ChunkPos, dim Dimension, col *chunk.Column) error {
+	if db.conf.Blocks == nil {
+		return fmt.Errorf("store column %v: %w", pos, ErrNoBlocks)
+	}
 	if _, ok := dim.Range(); !ok {
 		return fmt.Errorf("store column %v: unknown dimension %v", pos, dim)
 	}
@@ -546,7 +556,9 @@ func (db *DB) NewColumnIterator(r *IteratorRange) *ColumnIterator {
 		r = &IteratorRange{}
 	}
 	it := newColumnIterator(db, r)
-	if err := db.Flush(); err != nil {
+	if db.conf.Blocks == nil {
+		it.err = ErrNoBlocks
+	} else if err := db.Flush(); err != nil {
 		it.err = err
 	}
 	return it

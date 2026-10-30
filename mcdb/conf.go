@@ -28,7 +28,10 @@ type Config struct {
 	// If nil, Bedrock-compatible defaults are used.
 	LDBOptions *opt.Options
 
-	// Blocks maps block states to runtime IDs for chunk encoding. Required.
+	// Blocks maps block states to runtime IDs for chunk encoding. Only
+	// columns need it: without it, level keys, players and level.dat work
+	// and column calls return ErrNoBlocks, so an engine can open its world
+	// before its block registry is built.
 	Blocks chunk.BlockRegistry
 	// Upgrader upgrades block states saved by older versions. If nil, Open
 	// creates one.
@@ -46,9 +49,6 @@ type Config struct {
 // Open opens the world in dir, creating it if needed. If a level.dat is
 // present it is read; otherwise default values are used.
 func (conf Config) Open(dir string) (*DB, error) {
-	if conf.Blocks == nil {
-		return nil, errors.New("open db: Config.Blocks is required")
-	}
 	if conf.Log == nil {
 		conf.Log = slog.New(slog.DiscardHandler)
 	}
