@@ -33,15 +33,19 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.
 - `mcdb`: the world provider. Keys in `keys.go`, chunk/entity/block entity
-  storage in `db.go`, the column iterator, players.
+  storage in `db.go`, the 5-second write buffer in `buffer.go`, chunk
+  metadata (`?` keys and their dictionary) in `meta.go`, the column iterator,
+  players.
 - `mcdb/leveldat`: `level.dat` reading and writing.
 - `cube`: `Pos`, `Range` and `Face`, shared by the packages above.
 
 ## Invariants: do not break these
 
 1. A world saved by this repo opens in the current Minecraft client and in BDS.
-   The client is stricter than BDS: it crashed on Dragonfly's format (chunk
-   version 42, biome copy markers, zero-layer sub chunks, `6` keys).
+   The client is stricter than BDS: it crashed on Dragonfly's format (biome
+   copy markers, zero-layer sub chunks). Chunk version 42 and `6` keys are
+   what BDS 1.26.60 writes, so mcdb writes them again; check a world in the
+   client after changing chunk output.
 2. Disk output matches a world saved by the game. When you change what is
    written, save a world in the game, write it with this repo, and compare the
    keys and value sizes one by one.

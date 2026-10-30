@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/helix-bedrock/world/chunk"
 	"github.com/helix-bedrock/world/leveldb"
@@ -32,6 +33,10 @@ type Config struct {
 	// Upgrader upgrades block states saved by older versions. If nil, Open
 	// creates one.
 	Upgrader *chunk.Upgrader
+	// FlushInterval is how often buffered writes are written to LevelDB as
+	// one batch. Zero means DefaultFlushInterval; negative means only Flush
+	// and Close write them.
+	FlushInterval time.Duration
 }
 
 // Open opens the world in dir, creating it if needed. If a level.dat is
@@ -93,5 +98,23 @@ func (conf Config) Open(dir string) (*DB, error) {
 		return nil, fmt.Errorf("open db: leveldb: %w", err)
 	}
 	db.ldb = ldb
+	db.buf = newWriteBuffer(ldb)
+	db.meta = newMetaDictionary()
+	if b, err := ldb.Get([]byte(keyChunkMetaData), nil); err == nil {
+		meta, err := decodeMetaDictionary(b)
+		if err != nil {
+			// Keep what decoded; chunks pointing at the rest keep their hash.
+			conf.Log.Error("open db: " + err.Error())
+		}
+		db.meta = meta
+	} else if !errors.Is(err, leveldb.ErrNotFound) {
+		_ = ldb.Close()
+		return nil, fmt.Errorf("open db: read chunk metadata: %w", err)
+	}
+	if conf.FlushInterval == 0 {
+		db.conf.FlushInterval = DefaultFlushInterval()
+	}
+	db.stop, db.stopped = make(chan struct{}), make(chan struct{})
+	go db.flushLoop()
 	return db, nil
 }

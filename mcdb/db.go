@@ -2,8 +2,10 @@
 // https://github.com/df-mc/dragonfly/blob/1793369709ceed934675d69e86ff6c828e4216c8/server/world/mcdb/db.go
 //
 // Changed for Helix: plain ChunkPos/Dimension types instead of engine ones,
-// level.dat data exposed directly, player IDs as strings, no panics, and
-// length checks on data read from disk.
+// level.dat data exposed directly, player IDs as strings, no panics, length
+// checks on data read from disk, and keys, values and write timing matching
+// BDS 1.26.60 (buffered 5-second batches, actor key byte order, chunk
+// metadata, finalisation, digests and legacy key cleanup).
 
 package mcdb
 
@@ -28,18 +30,23 @@ import (
 // DB reads and writes a Bedrock world: the LevelDB database in its db
 // folder and its level.dat.
 //
-// LoadColumn, StoreColumn and the player methods may be called from any
-// goroutine; LevelDB orders concurrent access. Callers must not store the
-// same column from two goroutines at once. LevelDat and Close must not run
-// concurrently with anything else.
+// Writes are buffered and reach LevelDB as one batch every FlushInterval,
+// as BDS does; reads see buffered writes at once. LoadColumn, StoreColumn,
+// Flush and the player methods may be called from any goroutine. Callers
+// must not store the same column from two goroutines at once. LevelDat and
+// Close must not run concurrently with anything else.
 type DB struct {
 	conf Config
 	ldb  *leveldb.DB
+	buf  *writeBuffer
+	meta *metaDictionary
 	dir  string
 	ldat *leveldat.Data
 	// ldatFile keeps every level.dat field, including ones Data does not
 	// know, so they are written back unchanged.
 	ldatFile *leveldat.LevelDat
+
+	stop, stopped chan struct{}
 }
 
 // Open opens the world in dir with the block registry passed and default
@@ -51,6 +58,45 @@ func Open(dir string, blocks chunk.BlockRegistry) (*DB, error) {
 // LevelDat returns the world's level.dat values. Changes are saved by Close.
 func (db *DB) LevelDat() *leveldat.Data {
 	return db.ldat
+}
+
+// flushLoop flushes buffered writes every FlushInterval until Close.
+func (db *DB) flushLoop() {
+	defer close(db.stopped)
+	if db.conf.FlushInterval < 0 {
+		<-db.stop
+		return
+	}
+	t := time.NewTicker(db.conf.FlushInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-db.stop:
+			return
+		case <-t.C:
+			if err := db.Flush(); err != nil {
+				db.conf.Log.Error(err.Error())
+			}
+		}
+	}
+}
+
+// Flush writes every buffered write to LevelDB now, as one batch.
+func (db *DB) Flush() error {
+	var extra *txn
+	if b, changed, err := db.meta.encode(); err != nil {
+		db.conf.Log.Error("flush: " + err.Error())
+	} else if changed {
+		extra = &txn{}
+		extra.Put([]byte(keyChunkMetaData), b)
+	}
+	if err := db.buf.flush(extra); err != nil {
+		if extra != nil {
+			db.meta.markDirty()
+		}
+		return fmt.Errorf("mcdb: %w", err)
+	}
+	return nil
 }
 
 // playerData holds the fields that indicate where player data is stored for a player with a specific UUID.
@@ -78,7 +124,7 @@ func (db *DB) LoadPlayerSpawnPosition(id string) (pos cube.Pos, exists bool, err
 
 // loadPlayerData loads the data stored in a LevelDB database for a specific UUID.
 func (db *DB) loadPlayerData(id string) (serverData map[string]any, key string, exists bool, err error) {
-	data, err := db.ldb.Get([]byte("player_"+id), nil)
+	data, err := db.buf.get([]byte("player_" + id))
 	if errors.Is(err, leveldb.ErrNotFound) {
 		return nil, "", false, nil
 	} else if err != nil {
@@ -92,7 +138,7 @@ func (db *DB) loadPlayerData(id string) (serverData map[string]any, key string, 
 	if d.UUID != id || d.ServerID == "" {
 		return nil, d.ServerID, true, fmt.Errorf("invalid player data for uuid %v: %v", id, d)
 	}
-	serverDB, err := db.ldb.Get([]byte(d.ServerID), nil)
+	serverDB, err := db.buf.get([]byte(d.ServerID))
 	if err != nil {
 		return nil, d.ServerID, true, fmt.Errorf("error reading server data for player %v (%v): %w", id, d.ServerID, err)
 	}
@@ -105,32 +151,30 @@ func (db *DB) loadPlayerData(id string) (serverData map[string]any, key string, 
 
 // SavePlayerSpawnPosition saves the player spawn position passed to the levelDB database.
 func (db *DB) SavePlayerSpawnPosition(id string, pos cube.Pos) error {
-	_, err := db.ldb.Get([]byte("player_"+id), nil)
+	_, err := db.buf.get([]byte("player_" + id))
 	d := make(map[string]any)
 	k := "player_server_" + id
+	t := &txn{}
 
 	if errors.Is(err, leveldb.ErrNotFound) {
 		data, err := nbt.MarshalEncoding(playerData{UUID: id, ServerID: k}, nbt.LittleEndian)
 		if err != nil {
 			return fmt.Errorf("encode player data (uuid=%v): %w", id, err)
 		}
-		if err := db.ldb.Put([]byte("player_"+id), data, nil); err != nil {
-			return fmt.Errorf("write player data (uuid=%v): %w", id, err)
-		}
+		t.Put([]byte("player_"+id), data)
 	} else if err != nil {
 		return fmt.Errorf("read player data (uuid=%v): %w", id, err)
 	} else if d, k, _, err = db.loadPlayerData(id); err != nil {
 		return err
 	}
-	d["SpawnX"], d["SpawnY"], d["SpawnZ"] = int32(pos.X()), int32(pos.Y()), int32(pos.Z())
+	d["SpawnX"], d["SpawnY"], d["SpawnZ"] = int32(pos.X()), int32(pos.Y()), int32(pos.Z()) //nolint:gosec // block coordinates fit in int32
 
 	data, err := nbt.MarshalEncoding(d, nbt.LittleEndian)
 	if err != nil {
 		return fmt.Errorf("encode server data for player %v: %w", id, err)
 	}
-	if err = db.ldb.Put([]byte(k), data, nil); err != nil {
-		return fmt.Errorf("write server data for player %v: %w", id, err)
-	}
+	t.Put([]byte(k), data)
+	db.buf.apply(t)
 	return nil
 }
 
@@ -148,9 +192,13 @@ func (db *DB) LoadColumn(pos ChunkPos, dim Dimension) (*chunk.Column, error) {
 	return col, nil
 }
 
-// chunkVersion is the chunk format version written. 41 is what Minecraft
-// 1.26.52 itself writes (seen in its saved worlds); Dragonfly wrote 42.
-const chunkVersion = 41
+// chunkVersion is the chunk format version BDS 1.26.60 writes. BDS marks a
+// chunk with any other version for upgrade.
+const chunkVersion = 42
+
+// legacyEntitiesBelow is the chunk version below which BDS still migrates
+// entities from keyEntitiesOld.
+const legacyEntitiesBelow = 40
 
 func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	var cdata chunk.SerialisedData
@@ -178,14 +226,20 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode chunk data: %w", err)
 	}
-	legacy, err := db.legacyStates(k)
+	legacy, err := db.buf.has(k.Sum(keyLegacyStates))
 	if err != nil {
 		return nil, fmt.Errorf("read legacy states: %w", err)
 	}
 	if legacy {
 		col.Chunk.MarkLegacyStates()
 	}
-	col.Entities, err = db.entities(k)
+	if col.Finalisation, err = db.finalisation(k); err != nil {
+		return nil, fmt.Errorf("read finalisation: %w", err)
+	}
+	if col.MetaDataHash, col.BlendingData, err = db.metaData(k); err != nil {
+		return nil, fmt.Errorf("read metadata: %w", err)
+	}
+	col.Entities, err = db.entities(k, ver)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		// Not all chunks need to have entities, so an ErrNotFound is fine here.
 		return nil, fmt.Errorf("read entities: %w", err)
@@ -202,24 +256,12 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	return col, nil
 }
 
-// legacyStates reports whether the chunk was saved with keyLegacyStates present.
-func (db *DB) legacyStates(k dbKey) (bool, error) {
-	_, err := db.ldb.Get(k.Sum(keyLegacyStates), nil)
-	if errors.Is(err, leveldb.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func (db *DB) version(k dbKey) (byte, error) {
-	p, err := db.ldb.Get(k.Sum(keyVersion), nil)
+	p, err := db.buf.get(k.Sum(keyVersion))
 	if errors.Is(err, leveldb.ErrNotFound) {
 		// Although the version at `keyVersion` may not be found, there is
 		// another `keyVersionOld` where the version may be found.
-		if p, err = db.ldb.Get(k.Sum(keyVersionOld), nil); err != nil {
+		if p, err = db.buf.get(k.Sum(keyVersionOld)); err != nil {
 			return 0, err
 		}
 	}
@@ -232,17 +274,56 @@ func (db *DB) version(k dbKey) (byte, error) {
 	return p[0], nil
 }
 
+// finalisation reads keyFinalisation. Like BDS, a chunk without one is
+// finished.
+func (db *DB) finalisation(k dbKey) (chunk.Finalisation, error) {
+	p, err := db.buf.get(k.Sum(keyFinalisation))
+	if errors.Is(err, leveldb.ErrNotFound) {
+		return chunk.DefaultFinalisation(), nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(p) != 4 {
+		return 0, fmt.Errorf("expected 4 bytes, got %v", len(p))
+	}
+	return chunk.Finalisation(int32(binary.LittleEndian.Uint32(p))), nil //nolint:gosec // raw int32 bits
+}
+
+// metaData reads keyMetaDataHash and keyBlendingData. Missing keys give
+// zero values: BDS infers metadata for such chunks.
+func (db *DB) metaData(k dbKey) (uint64, []byte, error) {
+	var h uint64
+	p, err := db.buf.get(k.Sum(keyMetaDataHash))
+	if err == nil {
+		if len(p) != 8 {
+			return 0, nil, fmt.Errorf("expected 8 hash bytes, got %v", len(p))
+		}
+		h = binary.LittleEndian.Uint64(p)
+	} else if !errors.Is(err, leveldb.ErrNotFound) {
+		return 0, nil, err
+	}
+	blend, err := db.buf.get(k.Sum(keyBlendingData))
+	if errors.Is(err, leveldb.ErrNotFound) {
+		return h, nil, nil
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	return h, slices.Clone(blend), nil
+}
+
 func (db *DB) biomes(k dbKey) ([]byte, error) {
-	biomes, err := db.ldb.Get(k.Sum(key3DData), nil)
+	biomes, err := db.buf.get(k.Sum(key3DData))
 	if err != nil {
 		return nil, err
 	}
 	// The first 512 bytes is a heightmap (16*16 int16s), the biomes follow. We
 	// calculate a heightmap on startup so the heightmap can be discarded.
-	if n := len(biomes); n <= 512 {
+	if n := len(biomes); n <= heightMapSize {
 		return nil, fmt.Errorf("expected at least 513 bytes for 3D data, got %v", n)
 	}
-	return biomes[512:], nil
+	return biomes[heightMapSize:], nil
 }
 
 func (db *DB) subChunks(k dbKey) ([][]byte, error) {
@@ -251,33 +332,36 @@ func (db *DB) subChunks(k dbKey) ([][]byte, error) {
 
 	var err error
 	for i := range sub {
-		y := uint8(i + (r[0] >> 4))
-		sub[i], err = db.ldb.Get(k.Sum(keySubChunkData, y), nil)
+		y := uint8(i + (r[0] >> 4)) //nolint:gosec // sub chunk Y is stored as a raw byte
+		sub[i], err = db.buf.get(k.Sum(keySubChunkData, y))
 		if errors.Is(err, leveldb.ErrNotFound) {
 			// No sub chunk present at this Y level. We skip this one and move
 			// to the next, which might still be present.
 			continue
 		} else if err != nil {
-			return nil, fmt.Errorf("sub chunk %v: %w", int8(i), err)
+			return nil, fmt.Errorf("sub chunk %v: %w", int8(i), err) //nolint:gosec // index fits
 		}
 	}
 	return sub, nil
 }
 
-func (db *DB) entities(k dbKey) ([]chunk.Entity, error) {
+func (db *DB) entities(k dbKey, ver byte) ([]chunk.Entity, error) {
 	// https://learn.microsoft.com/en-us/minecraft/creator/documents/actorstorage
-	ids, err := db.ldb.Get(append([]byte(keyEntityIdentifiers), index(k.pos, k.dim)...), nil)
+	ids, err := db.buf.get(append([]byte(keyEntityIdentifiers), index(k.pos, k.dim)...))
 	if err != nil {
-		// Key not found, try old method of loading entities.
-		return db.entitiesOld(k)
+		if errors.Is(err, leveldb.ErrNotFound) && ver < legacyEntitiesBelow {
+			// BDS only migrates the old entity key for old chunks.
+			return db.entitiesOld(k)
+		}
+		return nil, err
 	}
-	if len(ids)%8 != 0 {
+	if len(ids)%actorKeySize != 0 {
 		return nil, fmt.Errorf("entity ID list has %d bytes, not a multiple of 8", len(ids))
 	}
-	entities := make([]chunk.Entity, 0, len(ids)/8)
-	for i := 0; i < len(ids); i += 8 {
-		id := int64(binary.LittleEndian.Uint64(ids[i : i+8]))
-		data, err := db.ldb.Get(entityIndex(id), nil)
+	entities := make([]chunk.Entity, 0, len(ids)/actorKeySize)
+	for i := 0; i < len(ids); i += actorKeySize {
+		id := actorIDFromKey(ids[i : i+actorKeySize])
+		data, err := db.buf.get(entityIndex(id))
 		if err != nil {
 			db.conf.Log.Error("read entity: "+err.Error(), "ID", id)
 			return nil, err
@@ -292,7 +376,7 @@ func (db *DB) entities(k dbKey) ([]chunk.Entity, error) {
 }
 
 func (db *DB) entitiesOld(k dbKey) ([]chunk.Entity, error) {
-	data, err := db.ldb.Get(k.Sum(keyEntitiesOld), nil)
+	data, err := db.buf.get(k.Sum(keyEntitiesOld))
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +403,7 @@ func (db *DB) entitiesOld(k dbKey) ([]chunk.Entity, error) {
 func (db *DB) blockEntities(k dbKey) ([]chunk.BlockEntity, error) {
 	var blockEntities []chunk.BlockEntity
 
-	data, err := db.ldb.Get(k.Sum(keyBlockEntities), nil)
+	data, err := db.buf.get(k.Sum(keyBlockEntities))
 	if err != nil {
 		return blockEntities, err
 	}
@@ -339,7 +423,7 @@ func (db *DB) blockEntities(k dbKey) ([]chunk.BlockEntity, error) {
 }
 
 func (db *DB) scheduledUpdates(k dbKey) ([]chunk.ScheduledBlockUpdate, int64, error) {
-	data, err := db.ldb.Get(k.Sum(keyPendingScheduledTicks), nil)
+	data, err := db.buf.get(k.Sum(keyPendingScheduledTicks))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -362,7 +446,9 @@ func (db *DB) scheduledUpdates(k dbKey) ([]chunk.ScheduledBlockUpdate, int64, er
 	return updates, int64(m.CurrentTick), nil
 }
 
-// StoreColumn stores a column at a position in a dimension.
+// StoreColumn stores a column at a position in a dimension. The column is
+// buffered and reaches LevelDB with the next flush, in one batch with
+// everything else stored until then.
 func (db *DB) StoreColumn(pos ChunkPos, dim Dimension, col *chunk.Column) error {
 	if _, ok := dim.Range(); !ok {
 		return fmt.Errorf("store column %v: unknown dimension %v", pos, dim)
@@ -377,77 +463,91 @@ func (db *DB) StoreColumn(pos ChunkPos, dim Dimension, col *chunk.Column) error 
 	return nil
 }
 
+// blendingNone is the blending data BDS writes for a chunk it generates.
+var blendingNone = []byte{0, 11}
+
 func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 	data := chunk.Encode(col.Chunk, chunk.DiskEncoding)
-	n := 8 + len(data.SubChunks) + len(col.Entities)
-	batch := leveldb.MakeBatch(n)
+	t := &txn{}
 
-	db.storeVersion(batch, k, chunkVersion)
-	db.storeBiomes(batch, k, data.Biomes)
-	db.storeSubChunks(batch, k, data.SubChunks, col.Chunk.Range())
-	// No finalisation ('6') key: Minecraft 1.26.52 only keeps it on a few
-	// old chunks and writes none itself, so Helix does not add one either.
-	// Existing keys, including the newer '=' and '@' ones, are left as is.
-	db.storeLegacyStates(batch, k, col.Chunk.LegacyStates())
-	db.storeEntities(batch, k, col.Entities)
-	db.storeBlockEntities(batch, k, col.BlockEntities)
-	db.storeScheduledUpdates(batch, k, col.Tick, col.ScheduledBlocks)
+	hash, err := db.meta.savedHash(col.MetaDataHash, k.dim, db.ldat.RandomSeed, db.ldat.Generator)
+	if err != nil {
+		return fmt.Errorf("chunk metadata: %w", err)
+	}
+	blending := col.BlendingData
+	if blending == nil {
+		blending = blendingNone
+	}
 
-	return db.ldb.Write(batch, nil)
-}
+	t.Put(k.Sum(keyVersion), []byte{chunkVersion})
+	t.Put(k.Sum(keyMetaDataHash), binary.LittleEndian.AppendUint64(nil, hash))
+	t.Put(k.Sum(keyBlendingData), blending)
+	db.storeBiomes(t, k, data.Biomes)
+	db.storeSubChunks(t, k, data.SubChunks, col.Chunk.Range())
+	t.Put(k.Sum(keyFinalisation), binary.LittleEndian.AppendUint32(nil, uint32(col.Finalisation))) //nolint:gosec // raw int32 bits
+	for _, tag := range legacyChunkTags {
+		t.Delete(k.Sum(tag))
+	}
+	db.storeLegacyStates(t, k, col.Chunk.LegacyStates())
+	db.storeEntities(t, k, col.Entities)
+	db.storeBlockEntities(t, k, col.BlockEntities)
+	db.storeScheduledUpdates(t, k, col.Tick, col.ScheduledBlocks)
 
-func (db *DB) storeVersion(batch *leveldb.Batch, k dbKey, ver uint8) {
-	batch.Put(k.Sum(keyVersion), []byte{ver})
+	db.buf.apply(t)
+	return nil
 }
 
 // heightMapSize is the 16x16 int16 height map in front of the biomes. It is
 // written as zeros; the height map is recalculated on load.
 const heightMapSize = 512
 
-func (db *DB) storeBiomes(batch *leveldb.Batch, k dbKey, biomes []byte) {
+func (db *DB) storeBiomes(t *txn, k dbKey, biomes []byte) {
 	data := make([]byte, heightMapSize, heightMapSize+len(biomes))
-	batch.Put(k.Sum(key3DData), append(data, biomes...))
+	t.Put(k.Sum(key3DData), append(data, biomes...))
 }
 
-func (db *DB) storeSubChunks(batch *leveldb.Batch, k dbKey, subChunks [][]byte, r cube.Range) {
+func (db *DB) storeSubChunks(t *txn, k dbKey, subChunks [][]byte, r cube.Range) {
 	for i, sub := range subChunks {
-		key := k.Sum(keySubChunkData, byte(i+(r[0]>>4)))
+		key := k.Sum(keySubChunkData, byte(i+(r[0]>>4))) //nolint:gosec // sub chunk Y is stored as a raw byte
 		if len(sub) == 0 {
 			// No layers: the game stores nothing, so remove any
 			// sub chunk previously saved at this Y.
-			batch.Delete(key)
+			t.Delete(key)
 			continue
 		}
-		batch.Put(key, sub)
+		t.Put(key, sub)
 	}
 }
 
 // storeLegacyStates keeps keyLegacyStates while the chunk's derived states are still pending and removes
 // it once they were recalculated, so a chunk saved with defaulted states is not mistaken for an upgraded one.
-func (db *DB) storeLegacyStates(batch *leveldb.Batch, k dbKey, legacy bool) {
+func (db *DB) storeLegacyStates(t *txn, k dbKey, legacy bool) {
 	key := k.Sum(keyLegacyStates)
 	if !legacy {
-		batch.Delete(key)
+		t.Delete(key)
 		return
 	}
-	batch.Put(key, []byte{1})
+	t.Put(key, []byte{1})
 }
 
-func (db *DB) storeEntities(batch *leveldb.Batch, k dbKey, entities []chunk.Entity) {
+// storeEntities writes the chunk's digp record (even when empty, as BDS
+// does), its digest version and one actorprefix record per entity, and
+// deletes the records of entities that left.
+func (db *DB) storeEntities(t *txn, k dbKey, entities []chunk.Entity) {
 	idsKey := append([]byte(keyEntityIdentifiers), index(k.pos, k.dim)...)
 
-	// load the ids of the previous entities
 	var previousIDs []int64
-	digpPrev, err := db.ldb.Get(idsKey, nil)
+	digpPrev, err := db.buf.get(idsKey)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		db.conf.Log.Error("store entities: read chunk entity IDs: " + err.Error())
 	}
 	if err == nil {
-		for i := 0; i+8 <= len(digpPrev); i += 8 {
-			previousIDs = append(previousIDs, int64(binary.LittleEndian.Uint64(digpPrev[i:])))
+		for i := 0; i+actorKeySize <= len(digpPrev); i += actorKeySize {
+			previousIDs = append(previousIDs, actorIDFromKey(digpPrev[i:]))
 		}
 	}
 
+	ids := make([]byte, 0, actorKeySize*len(entities))
 	newIDs := make([]int64, 0, len(entities))
 	for _, e := range entities {
 		e.Data["UniqueID"] = e.ID
@@ -456,72 +556,57 @@ func (db *DB) storeEntities(batch *leveldb.Batch, k dbKey, entities []chunk.Enti
 			db.conf.Log.Error("store entities: encode NBT: " + err.Error())
 			continue
 		}
-		batch.Put(entityIndex(e.ID), b)
+		t.Put(entityIndex(e.ID), b)
 		newIDs = append(newIDs, e.ID)
+		ids = appendActorKey(ids, e.ID)
 	}
-
-	// Remove entities that are no longer referenced.
-	for _, uniqueID := range previousIDs {
-		if !slices.Contains(newIDs, uniqueID) {
-			batch.Delete(entityIndex(uniqueID))
+	for _, id := range previousIDs {
+		if !slices.Contains(newIDs, id) {
+			t.Delete(entityIndex(id))
 		}
 	}
-	if len(entities) == 0 {
-		batch.Delete(idsKey)
-	} else {
-		// Save the index of entities in the chunk.
-		ids := make([]byte, 0, 8*len(newIDs))
-		for _, uniqueID := range newIDs {
-			ids = binary.LittleEndian.AppendUint64(ids, uint64(uniqueID))
-		}
-		batch.Put(idsKey, ids)
-	}
-
-	// Remove old entity data for this chunk.
-	batch.Delete(k.Sum(keyEntitiesOld))
+	t.Put(idsKey, ids)
+	t.Put(k.Sum(keyActorDigestVersion), []byte{0})
 }
 
-func entityIndex(id int64) []byte {
-	return binary.LittleEndian.AppendUint64([]byte(keyEntity), uint64(id))
-}
-
-func (db *DB) storeBlockEntities(batch *leveldb.Batch, k dbKey, blockEntities []chunk.BlockEntity) {
+// storeBlockEntities writes the chunk's block entities, or deletes the key
+// when there are none, as BDS does.
+func (db *DB) storeBlockEntities(t *txn, k dbKey, blockEntities []chunk.BlockEntity) {
 	if len(blockEntities) == 0 {
-		// The game keeps an empty value rather than deleting the key.
-		batch.Put(k.Sum(keyBlockEntities), nil)
+		t.Delete(k.Sum(keyBlockEntities))
 		return
 	}
 
 	buf := bytes.NewBuffer(nil)
 	enc := nbt.NewEncoderWithEncoding(buf, nbt.LittleEndian)
 	for _, b := range blockEntities {
-		b.Data["x"], b.Data["y"], b.Data["z"] = int32(b.Pos[0]), int32(b.Pos[1]), int32(b.Pos[2])
+		b.Data["x"], b.Data["y"], b.Data["z"] = int32(b.Pos[0]), int32(b.Pos[1]), int32(b.Pos[2]) //nolint:gosec // block coordinates fit in int32
 		if err := enc.Encode(b.Data); err != nil {
 			db.conf.Log.Error("store block entities: encode nbt: " + err.Error())
 		}
 	}
-	batch.Put(k.Sum(keyBlockEntities), buf.Bytes())
+	t.Put(k.Sum(keyBlockEntities), buf.Bytes())
 }
 
-func (db *DB) storeScheduledUpdates(batch *leveldb.Batch, k dbKey, tick int64, updates []chunk.ScheduledBlockUpdate) {
+func (db *DB) storeScheduledUpdates(t *txn, k dbKey, tick int64, updates []chunk.ScheduledBlockUpdate) {
 	if len(updates) == 0 {
-		batch.Delete(k.Sum(keyPendingScheduledTicks))
+		t.Delete(k.Sum(keyPendingScheduledTicks))
 		return
 	}
 	list := make([]map[string]any, len(updates))
 	bpe := chunk.BlockPaletteEncoding{Blocks: db.conf.Blocks, Upgrader: db.conf.Upgrader}
 	for i, update := range updates {
 		list[i] = map[string]any{
-			"x": int32(update.Pos[0]), "y": int32(update.Pos[1]), "z": int32(update.Pos[2]),
+			"x": int32(update.Pos[0]), "y": int32(update.Pos[1]), "z": int32(update.Pos[2]), //nolint:gosec // block coordinates fit in int32
 			"time": update.Tick, "blockState": bpe.EncodeBlockState(update.Block),
 		}
 	}
-	b, err := nbt.MarshalEncoding(scheduledUpdates{CurrentTick: int32(tick), TickList: list}, nbt.LittleEndian)
+	b, err := nbt.MarshalEncoding(scheduledUpdates{CurrentTick: int32(tick), TickList: list}, nbt.LittleEndian) //nolint:gosec // BDS stores the tick as int32
 	if err != nil {
 		db.conf.Log.Error("store scheduled updates: encode nbt: " + err.Error())
 		return
 	}
-	batch.Put(k.Sum(keyPendingScheduledTicks), b)
+	t.Put(k.Sum(keyPendingScheduledTicks), b)
 }
 
 type scheduledUpdates struct {
@@ -530,21 +615,31 @@ type scheduledUpdates struct {
 }
 
 // NewColumnIterator returns a ColumnIterator that may be used to iterate over all
-// position/chunk pairs in a database.
+// position/chunk pairs in a database. Buffered writes are flushed first.
 // An IteratorRange r may be passed to specify limits in terms of what chunks
 // should be read. r may be set to nil to read all chunks from the DB.
 func (db *DB) NewColumnIterator(r *IteratorRange) *ColumnIterator {
 	if r == nil {
 		r = &IteratorRange{}
 	}
-	return newColumnIterator(db, r)
+	it := newColumnIterator(db, r)
+	if err := db.Flush(); err != nil {
+		it.err = err
+	}
+	return it
 }
 
-// Close closes the provider, saving any file that might need to be saved, such as the level.dat.
+// Close flushes buffered writes and closes the provider, saving any file
+// that might need to be saved, such as the level.dat.
 func (db *DB) Close() error {
+	close(db.stop)
+	<-db.stopped
 	db.ldat.LastPlayed = time.Now().Unix()
 
 	var errs []error
+	if err := db.Flush(); err != nil {
+		errs = append(errs, fmt.Errorf("close: %w", err))
+	}
 	if err := db.ldatFile.Marshal(*db.ldat); err != nil {
 		errs = append(errs, fmt.Errorf("close: %w", err))
 	} else if err := db.ldatFile.WriteFile(filepath.Join(db.dir, "level.dat")); err != nil {
@@ -574,7 +669,7 @@ func (k dbKey) Sum(p ...byte) []byte {
 // index returns the key prefix for a chunk: X and Z, followed by the
 // dimension ID for every dimension except the Overworld.
 func index(position ChunkPos, dim Dimension) []byte {
-	x, z := uint32(position[0]), uint32(position[1])
+	x, z := uint32(position[0]), uint32(position[1]) //nolint:gosec // raw int32 bits
 	b := make([]byte, 12)
 
 	binary.LittleEndian.PutUint32(b, x)
@@ -582,7 +677,7 @@ func index(position ChunkPos, dim Dimension) []byte {
 	if dim == 0 {
 		return b[:8]
 	}
-	binary.LittleEndian.PutUint32(b[8:], uint32(dim))
+	binary.LittleEndian.PutUint32(b[8:], uint32(dim)) //nolint:gosec // raw int32 bits
 	return b
 }
 

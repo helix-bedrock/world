@@ -174,7 +174,7 @@ func TestStoreReplacesEntities(t *testing.T) {
 	if len(got.Entities) != 0 {
 		t.Fatalf("removed entity came back: %+v", got.Entities)
 	}
-	if _, err := db.ldb.Get(entityIndex(100), nil); !errors.Is(err, leveldb.ErrNotFound) {
+	if _, err := db.buf.get(entityIndex(100)); !errors.Is(err, leveldb.ErrNotFound) {
 		t.Fatalf("entity record not deleted: %v", err)
 	}
 }
@@ -222,6 +222,9 @@ func TestCorruptEntityIDs(t *testing.T) {
 	}
 	// An ID list that is not a multiple of 8 bytes used to crash loading.
 	key := append([]byte(keyEntityIdentifiers), index(ChunkPos{}, Overworld)...)
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.ldb.Put(key, []byte{1, 2, 3}, nil); err != nil {
 		t.Fatal(err)
 	}
