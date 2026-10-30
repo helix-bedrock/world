@@ -15,6 +15,12 @@ type Column struct {
 	BlockEntities   []BlockEntity
 	Tick            int64
 	ScheduledBlocks []ScheduledBlockUpdate
+	// RandomTick and RandomTicks are the chunk's second tick queue, BDS's
+	// random ticking queue: its clock and the updates due on it. The clock
+	// is separate from Tick: BDS advances it by the random tick speed each
+	// tick.
+	RandomTick  int64
+	RandomTicks []ScheduledBlockUpdate
 	// Finalisation is the chunk's generation state, saved as is. Use
 	// DefaultFinalisation for a finished chunk.
 	Finalisation Finalisation
@@ -23,7 +29,7 @@ type Column struct {
 	// when it is saved.
 	MetaDataHash uint64
 	// Extra holds chunk keys this package does not decode, by tag, as raw
-	// bytes: biome states, border blocks, hardcoded spawners, random ticks,
+	// bytes: biome states, border blocks, hardcoded spawners,
 	// structure starts and the like. They are written back unchanged, so a
 	// chunk keeps them through any store.
 	Extra map[byte][]byte

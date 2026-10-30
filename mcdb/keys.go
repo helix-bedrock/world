@@ -90,11 +90,11 @@ const (
 )
 
 // extraChunkTags are read into chunk.Column.Extra.
-var extraChunkTags = [...]byte{keyBiomeStates, keyBorderBlocks, keyHardcodedSpawners, keyRandomTicks, keyTag3C, keyTag3D, keyStructureStarts, keyListeners, keyNamedTicks}
+var extraChunkTags = [...]byte{keyBiomeStates, keyBorderBlocks, keyHardcodedSpawners, keyTag3C, keyTag3D, keyStructureStarts, keyListeners, keyNamedTicks}
 
 // deletedWhenAbsent are the Extra tags BDS deletes on save when the chunk
 // has none; it never deletes the others.
-var deletedWhenAbsent = [...]byte{keyBiomeStates, keyBorderBlocks, keyRandomTicks, keyStructureStarts, keyListeners, keyNamedTicks}
+var deletedWhenAbsent = [...]byte{keyBiomeStates, keyBorderBlocks, keyStructureStarts, keyListeners, keyNamedTicks}
 
 // legacyChunkTags are deleted every time BDS saves a chunk.
 var legacyChunkTags = [...]byte{key2DData, key2DDataLegacy, keyLegacyTerrain, keyEntitiesOld, keyBlockExtraData, keyConversionData, keyChecksums}

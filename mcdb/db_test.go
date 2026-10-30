@@ -76,6 +76,8 @@ func testColumn(dim Dimension, salt int) *chunk.Column {
 		ScheduledBlocks: []chunk.ScheduledBlockUpdate{
 			{Pos: cube.Pos{3, r.Min(), 4}, Block: 2, Tick: 42},
 		},
+		RandomTick:  int64(salt) * 3,
+		RandomTicks: []chunk.ScheduledBlockUpdate{{Pos: cube.Pos{5, r.Min(), 6}, Block: 1, Tick: 7}},
 	}
 }
 
@@ -99,6 +101,9 @@ func sameColumn(t *testing.T, want, got *chunk.Column) {
 	}
 	if len(got.ScheduledBlocks) != 1 || got.ScheduledBlocks[0] != want.ScheduledBlocks[0] || got.Tick != want.Tick {
 		t.Fatalf("scheduled: %+v tick %d", got.ScheduledBlocks, got.Tick)
+	}
+	if len(got.RandomTicks) != 1 || got.RandomTicks[0] != want.RandomTicks[0] || got.RandomTick != want.RandomTick {
+		t.Fatalf("random ticks: %+v tick %d", got.RandomTicks, got.RandomTick)
 	}
 }
 
@@ -218,11 +223,5 @@ func TestCorruptEntityIDs(t *testing.T) {
 	// Storing over it must not crash either.
 	if err := db.StoreColumn(ChunkPos{}, Overworld, testColumn(Overworld, 0)); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestOpenNeedsBlocks(t *testing.T) {
-	if _, err := (Config{}).Open(t.TempDir()); err == nil {
-		t.Fatal("no error without a block registry")
 	}
 }

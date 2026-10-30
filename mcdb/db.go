@@ -180,9 +180,13 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 		// Same as with entities, an ErrNotFound is fine here.
 		return nil, fmt.Errorf("read block entities: %w", err)
 	}
-	col.ScheduledBlocks, col.Tick, err = db.scheduledUpdates(k)
+	col.ScheduledBlocks, col.Tick, err = db.scheduledUpdates(k, keyPendingScheduledTicks)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		return nil, fmt.Errorf("read scheduled updates: %w", err)
+	}
+	col.RandomTicks, col.RandomTick, err = db.scheduledUpdates(k, keyRandomTicks)
+	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
+		return nil, fmt.Errorf("read random ticks: %w", err)
 	}
 	return col, nil
 }
@@ -352,8 +356,10 @@ func (db *DB) blockEntities(k dbKey) ([]chunk.BlockEntity, error) {
 	return blockEntities, nil
 }
 
-func (db *DB) scheduledUpdates(k dbKey) ([]chunk.ScheduledBlockUpdate, int64, error) {
-	data, err := db.buf.get(k.Sum(keyPendingScheduledTicks))
+// scheduledUpdates reads a tick queue, pending ticks or random ticks: both
+// are {currentTick, tickList}.
+func (db *DB) scheduledUpdates(k dbKey, tag byte) ([]chunk.ScheduledBlockUpdate, int64, error) {
+	data, err := db.buf.get(k.Sum(tag))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -425,7 +431,8 @@ func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 	db.storeExtraTags(t, k, col.Extra)
 	db.storeEntities(t, k, col.Entities)
 	db.storeBlockEntities(t, k, col.BlockEntities)
-	db.storeScheduledUpdates(t, k, col.Tick, col.ScheduledBlocks)
+	db.storeScheduledUpdates(t, k, keyPendingScheduledTicks, col.Tick, col.ScheduledBlocks)
+	db.storeScheduledUpdates(t, k, keyRandomTicks, col.RandomTick, col.RandomTicks)
 
 	db.buf.apply(t)
 	return nil
@@ -521,9 +528,11 @@ func (db *DB) storeBlockEntities(t *txn, k dbKey, blockEntities []chunk.BlockEnt
 	t.Put(k.Sum(keyBlockEntities), buf.Bytes())
 }
 
-func (db *DB) storeScheduledUpdates(t *txn, k dbKey, tick int64, updates []chunk.ScheduledBlockUpdate) {
+// storeScheduledUpdates writes a tick queue, or deletes it when empty, as
+// BDS does.
+func (db *DB) storeScheduledUpdates(t *txn, k dbKey, tag byte, tick int64, updates []chunk.ScheduledBlockUpdate) {
 	if len(updates) == 0 {
-		t.Delete(k.Sum(keyPendingScheduledTicks))
+		t.Delete(k.Sum(tag))
 		return
 	}
 	list := make([]map[string]any, len(updates))
@@ -539,7 +548,7 @@ func (db *DB) storeScheduledUpdates(t *txn, k dbKey, tick int64, updates []chunk
 		db.conf.Log.Error("store scheduled updates: encode nbt: " + err.Error())
 		return
 	}
-	t.Put(k.Sum(keyPendingScheduledTicks), b)
+	t.Put(k.Sum(tag), b)
 }
 
 type scheduledUpdates struct {

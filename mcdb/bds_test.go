@@ -172,7 +172,7 @@ func TestExtraTags(t *testing.T) {
 	db := openTest(t, t.TempDir())
 	defer func() { _ = db.Close() }()
 	col := testColumn(Overworld, 0)
-	col.Extra = map[byte][]byte{keyRandomTicks: {1, 2, 3}, keyTag3C: {4, 0, 0, 0}, keyVersion: {9}}
+	col.Extra = map[byte][]byte{keyBorderBlocks: {1, 2, 3}, keyTag3C: {4, 0, 0, 0}, keyVersion: {9}}
 	if err := db.StoreColumn(ChunkPos{}, Overworld, col); err != nil {
 		t.Fatal(err)
 	}
@@ -180,20 +180,20 @@ func TestExtraTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got.Extra[keyRandomTicks], []byte{1, 2, 3}) || len(got.Extra[keyTag3C]) != 4 {
+	if !bytes.Equal(got.Extra[keyBorderBlocks], []byte{1, 2, 3}) || len(got.Extra[keyTag3C]) != 4 {
 		t.Fatalf("extra: %v", got.Extra)
 	}
 	if _, ok := got.Extra[keyVersion]; ok {
 		t.Fatal("a decoded tag went through Extra")
 	}
-	// Random ticks are deleted once gone; the unknown int32 is left alone.
+	// Border blocks are deleted once gone; the unknown int32 is left alone.
 	got.Extra = nil
 	if err := db.StoreColumn(ChunkPos{}, Overworld, got); err != nil {
 		t.Fatal(err)
 	}
 	k := dbKey{}
-	if ok, _ := db.buf.has(k.Sum(keyRandomTicks)); ok {
-		t.Fatal("random ticks not deleted")
+	if ok, _ := db.buf.has(k.Sum(keyBorderBlocks)); ok {
+		t.Fatal("border blocks not deleted")
 	}
 	if ok, _ := db.buf.has(k.Sum(keyTag3C)); !ok {
 		t.Fatal("unknown tag deleted")
@@ -280,7 +280,7 @@ func TestNoBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if err := db.StoreLevel(LevelKeyScoreboard, []byte{1}); err != nil {
 		t.Fatal(err)
 	}
