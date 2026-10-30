@@ -51,6 +51,11 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
    in values the caller creates (`chunk.NewUpgrader`, `blockupgrader.New`).
 5. Unknown `level.dat` fields are kept and written back unchanged.
 6. Never import the engine or `helix-api`.
+7. Storage is one-to-one with BDS (currently 1.26.60): every key BDS writes,
+   its format and how BDS reads it. Next work (Helix build step 1, see the
+   "Engine design" section of `../.github/API_DESIGN.md`): a full key
+   inventory checked against BDS, and pluggable world and player stores with
+   LevelDB as the default.
 
 ## Gotchas
 
