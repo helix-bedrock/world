@@ -20,14 +20,6 @@ type BlockRegistry interface {
 	FilteringBlock(rid uint32) uint8
 	// LightBlock returns the light emission value for the runtime ID.
 	LightBlock(rid uint32) uint8
-	// RandomTickBlock reports whether the runtime ID receives random ticks.
-	RandomTickBlock(rid uint32) bool
-	// NBTBlock reports whether the runtime ID uses NBT data and requires NBT-aware encoding/decoding.
-	NBTBlock(rid uint32) bool
-	// LiquidDisplacingBlock reports whether the runtime ID displaces liquids.
-	LiquidDisplacingBlock(rid uint32) bool
-	// LiquidBlock reports whether the runtime ID represents a liquid block.
-	LiquidBlock(rid uint32) bool
 	// HashToRuntimeID resolves a "network block hash" to a runtime ID.
 	HashToRuntimeID(hash uint32) (rid uint32, ok bool)
 	// RuntimeIDToHash resolves a runtime ID to its "network block hash".
