@@ -211,7 +211,7 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	if ver != chunkVersion {
 		db.conf.Log.Debug("column: unsupported chunk version, trying to load anyway", "X", k.pos[0], "Z", k.pos[1], "dimension", fmt.Sprint(k.dim), "ver", ver)
 	}
-	cdata.Biomes, err = db.biomes(k)
+	cdata.Biomes, col.HeightMap, err = db.biomes(k)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		// Some chunks still use 2D chunk data and might not have this field, in
 		// which case we can just move on.
@@ -313,17 +313,16 @@ func (db *DB) metaData(k dbKey) (uint64, []byte, error) {
 	return h, slices.Clone(blend), nil
 }
 
-func (db *DB) biomes(k dbKey) ([]byte, error) {
+func (db *DB) biomes(k dbKey) ([]byte, []int16, error) {
 	biomes, err := db.buf.get(k.Sum(key3DData))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	// The first 512 bytes is a heightmap (16*16 int16s), the biomes follow. We
-	// calculate a heightmap on startup so the heightmap can be discarded.
+	// The first 512 bytes are the height map (16*16 int16s), the biomes follow.
 	if n := len(biomes); n <= heightMapSize {
-		return nil, fmt.Errorf("expected at least 513 bytes for 3D data, got %v", n)
+		return nil, nil, fmt.Errorf("expected at least 513 bytes for 3D data, got %v", n)
 	}
-	return biomes[heightMapSize:], nil
+	return biomes[heightMapSize:], decodeHeightMap(biomes), nil
 }
 
 func (db *DB) subChunks(k dbKey) ([][]byte, error) {
@@ -482,7 +481,7 @@ func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 	t.Put(k.Sum(keyVersion), []byte{chunkVersion})
 	t.Put(k.Sum(keyMetaDataHash), binary.LittleEndian.AppendUint64(nil, hash))
 	t.Put(k.Sum(keyBlendingData), blending)
-	db.storeBiomes(t, k, data.Biomes)
+	db.storeBiomes(t, k, col.Chunk, col.HeightMap, data.Biomes)
 	db.storeSubChunks(t, k, data.SubChunks, col.Chunk.Range())
 	t.Put(k.Sum(keyFinalisation), binary.LittleEndian.AppendUint32(nil, uint32(col.Finalisation))) //nolint:gosec // raw int32 bits
 	for _, tag := range legacyChunkTags {
@@ -497,12 +496,11 @@ func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 	return nil
 }
 
-// heightMapSize is the 16x16 int16 height map in front of the biomes. It is
-// written as zeros; the height map is recalculated on load.
+// heightMapSize is the 16x16 int16 height map in front of the biomes.
 const heightMapSize = 512
 
-func (db *DB) storeBiomes(t *txn, k dbKey, biomes []byte) {
-	data := make([]byte, heightMapSize, heightMapSize+len(biomes))
+func (db *DB) storeBiomes(t *txn, k dbKey, c *chunk.Chunk, saved []int16, biomes []byte) {
+	data := appendHeightMap(make([]byte, 0, heightMapSize+len(biomes)), c, saved, db.conf.Blocks)
 	t.Put(k.Sum(key3DData), append(data, biomes...))
 }
 

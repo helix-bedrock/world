@@ -173,6 +173,9 @@ func decodeBiomes(buf *bytes.Buffer, c *Chunk, e Encoding) error {
 				// This should never happen and there is no way to handle this.
 				return fmt.Errorf("first biome storage pointed to previous one")
 			}
+			if b != nil {
+				c.biomeSections = i + 1
+			}
 			if b == nil {
 				// This means this paletted storage had the flag pointing to the previous one. It basically means we should
 				// inherit whatever palette we decoded last.

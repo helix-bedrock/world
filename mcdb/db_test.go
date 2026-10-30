@@ -36,7 +36,12 @@ func (r *testRegistry) StateToRuntimeID(name string, props map[string]any) (uint
 	}
 	return 0, false
 }
-func (r *testRegistry) FilteringBlock(uint32) uint8           { return 0 }
+func (r *testRegistry) FilteringBlock(id uint32) uint8 {
+	if id == 0 {
+		return 0
+	}
+	return 15
+}
 func (r *testRegistry) LightBlock(uint32) uint8               { return 0 }
 func (r *testRegistry) RandomTickBlock(uint32) bool           { return false }
 func (r *testRegistry) NBTBlock(uint32) bool                  { return false }

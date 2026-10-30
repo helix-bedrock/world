@@ -31,6 +31,10 @@ type Chunk struct {
 	sub []*SubChunk
 	// biomes is an array of biome IDs. There is one biome ID for every column in the chunk.
 	biomes []*PalettedStorage
+	// biomeSections is how many biome storages were stored in full when the
+	// chunk was decoded; BDS writes the "copy previous" marker for the rest.
+	// Zero for a chunk that was not decoded.
+	biomeSections int
 }
 
 // New initialises a new chunk and returns it, so that it may be used.
@@ -62,6 +66,7 @@ func (chunk *Chunk) Clone() *Chunk {
 		air:                  chunk.air,
 		recalculateHeightMap: chunk.recalculateHeightMap,
 		legacyStates:         chunk.legacyStates,
+		biomeSections:        chunk.biomeSections,
 		heightMap:            slices.Clone(chunk.heightMap),
 		sub:                  make([]*SubChunk, len(chunk.sub)),
 		biomes:               make([]*PalettedStorage, len(chunk.biomes)),
@@ -270,4 +275,15 @@ func (chunk *Chunk) HighestFilledSubChunk() uint16 {
 		}
 	}
 	return 0
+}
+
+// highestNonEmptySub returns the index of the highest sub chunk holding any
+// block, or -1 if all are empty.
+func (chunk *Chunk) highestNonEmptySub() int {
+	for i := len(chunk.sub) - 1; i >= 0; i-- {
+		if sub := chunk.sub[i]; sub != nil && !sub.Empty() {
+			return i
+		}
+	}
+	return -1
 }

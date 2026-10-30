@@ -137,3 +137,33 @@ func FuzzMetaDictionary(f *testing.F) {
 		_, _ = decodeMetaDictionary(b)
 	})
 }
+
+func TestHeightMapAndBiomeMarkers(t *testing.T) {
+	r, _ := Overworld.Range()
+	c := chunk.New(newTestRegistry(), r)
+	c.SetBlock(3, 10, 5, 0, 1) // sub chunk index 4 (y 0..15)
+	b := appendHeightMap(nil, c, nil, newTestRegistry())
+	if got := int16(binary.LittleEndian.Uint16(b[2*(5<<4|3):])); got != 10+1-int16(r.Min()) {
+		t.Fatalf("height at 3,5: %d", got)
+	}
+	if got := binary.LittleEndian.Uint16(b[2*(3<<4|5):]); got != 0 {
+		t.Fatalf("empty column: %d", got)
+	}
+	// A loaded height above the blocks is kept.
+	saved := make([]int16, heightMapColumns)
+	saved[5<<4|3] = 200
+	b = appendHeightMap(nil, c, saved, newTestRegistry())
+	if got := binary.LittleEndian.Uint16(b[2*(5<<4|3):]); got != 200 {
+		t.Fatalf("saved height lost: %d", got)
+	}
+
+	// Biomes: in full up to the highest non-empty sub chunk, markers above.
+	enc := chunk.EncodeBiomes(c, chunk.DiskEncoding)
+	markers := 0
+	for i := len(enc) - 1; i >= 0 && enc[i] == 0xff; i-- {
+		markers++
+	}
+	if want := len(c.Sub()) - 5; markers != want {
+		t.Fatalf("%d copy markers, want %d", markers, want)
+	}
+}

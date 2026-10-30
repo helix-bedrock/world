@@ -3,7 +3,7 @@
 Minecraft: Bedrock Edition worlds for Go: the LevelDB database, chunks, block
 state upgrading and `level.dat`. Worlds it saves open in BDS and in the game.
 
-**Status as of 2026-10-29:** in development. Chunk keys and write timing now match BDS 1.26.60 (chunk metadata, finalisation, actor keys, 5-second batches); level keys and pluggable stores are next.
+**Status as of 2026-10-29:** in development. A world BDS 1.26.60 saved loads and saves back byte for byte (chunk metadata, heightmaps, biome markers, actor keys, 5-second batches); level keys and pluggable stores are next. Byte-identical NBT needs the sorted-keys fix in `protocol`.
 
 Part of [Helix](https://github.com/helix-bedrock), an open-source Minecraft: Bedrock
 Edition server engine in Go. It does not depend on the engine and can be used on

@@ -100,10 +100,17 @@ func EncodeBiomes(c *Chunk, e Encoding) []byte {
 	}()
 
 	if e.network() == 0 {
-		// On disk the game writes every biome storage in full, with the
-		// palette-type bit set (biome palettes hold plain IDs, not NBT),
-		// and never the "same as previous" marker. Match it exactly.
-		for _, b := range c.biomes {
+		// On disk BDS 1.26.60 writes biome storages in full, with the
+		// palette-type bit set (biome palettes hold plain IDs, not NBT), up
+		// to the highest non-empty sub chunk, and the "same as previous"
+		// marker for every section above it. A decoded chunk keeps the
+		// split it was stored with, raised if blocks were placed higher.
+		full := max(c.biomeSections, c.highestNonEmptySub()+1, 1)
+		for i, b := range c.biomes {
+			if i >= full {
+				_ = buf.WriteByte(0x7f<<1 | 1)
+				continue
+			}
 			encodeStorage(buf, b, 1)
 			DiskEncoding.encodePalette(buf, b.palette, BiomePaletteEncoding)
 		}
