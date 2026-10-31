@@ -289,7 +289,7 @@ func (db *DB) memCompaction() {
 	resumeC := make(chan struct{})
 	select {
 	case db.tcompPauseC <- (chan<- struct{})(resumeC):
-	case _ = <-db.compPerErrC:
+	case <-db.compPerErrC: //nolint:errcheck // the error is reported by the table compaction; here it only means compaction stopped
 		close(resumeC)
 		resumeC = nil
 	case <-db.closeC:
