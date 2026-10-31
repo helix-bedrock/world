@@ -2581,6 +2581,9 @@ func TestDB_UkeyShouldntHopAcrossTable(t *testing.T) {
 }
 
 func TestDB_TableCompactionBuilder(t *testing.T) {
+	if testing.Short() {
+		t.Skip("stress test: runs past CI's 15-minute limit under -race")
+	}
 	gomega.RegisterTestingT(t)
 	stor := testutil.NewStorage()
 	stor.OnLog(testingLogger(t))

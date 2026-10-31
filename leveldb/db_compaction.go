@@ -289,7 +289,7 @@ func (db *DB) memCompaction() {
 	resumeC := make(chan struct{})
 	select {
 	case db.tcompPauseC <- (chan<- struct{})(resumeC):
-	case <-db.compPerErrC:
+	case _ = <-db.compPerErrC:
 		close(resumeC)
 		resumeC = nil
 	case <-db.closeC:
