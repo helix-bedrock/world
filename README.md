@@ -1,35 +1,47 @@
-# world
+<div align="center">
 
-Minecraft: Bedrock Edition worlds for Go: the LevelDB database, chunks, block
-state upgrading and `level.dat`. Worlds it saves open in BDS and in the game.
+<img src=".github/helix-mark.svg" alt="Helix" width="120">
 
-**Status as of 2026-10-30:** in development. Storage is one-to-one with BDS 1.26.60: a world BDS saved loads and saves back byte for byte, and stores are pluggable (`KV`, `WorldStore`, `PlayerStore`). A world opens without a block registry for level keys, players and level.dat. `chunk.BlockRegistry` asks only for what chunk code uses: states, light emission and dampening, and network hashes. `Chunk.Snapshot` hands a chunk to another goroutine to save or encode while its owner keeps changing it; only sections changed afterwards are copied. `NetworkHashEncoding` writes block palettes as network hashes, as BDS sends them. Both of a chunk's tick queues are decoded: pending ticks (`ScheduledBlocks`) and BDS's random ticking queue (`RandomTicks`), each with its own clock.
+<p>
+  <b>Minecraft: Bedrock Edition worlds in Go</b><br>
+  Read and written byte for byte as BDS does, fast, low memory
+</p>
 
-Part of [Helix](https://github.com/helix-bedrock), an open-source Minecraft: Bedrock
-Edition server engine in Go. It does not depend on the engine and can be used on
-its own.
+[![Minecraft](https://img.shields.io/badge/minecraft-v1.26.60_(Bedrock)-black)](https://feedback.minecraft.net/hc/en-us/sections/360001186971-Release-Changelogs)
+[![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Status](https://img.shields.io/badge/status-in_development-orange)](STATUS.md)
 
-## Packages
+</div>
 
-| Package | What it has |
-|---|---|
-| `leveldb` | LevelDB with Bedrock's zlib and raw deflate compression (goleveldb with fixes, no panics) |
-| `chunk` | Chunks and sub chunks in memory, palettes, block storage, disk and network encoding |
-| `blockupgrader` | Upgrades block states saved by older Bedrock versions (pmmp's upgrade schemas) |
-| `mcdb` | The world provider, one-to-one with BDS 1.26.60: chunks, entities, block entities, chunk metadata, level keys, players, plugin namespaces, 5-second batched writes; pluggable through `KV`, `WorldStore` and `PlayerStore` |
-| `mcdb/leveldat` | Reading and writing `level.dat`, keeping fields it does not know |
-| `cube` | Block positions, height ranges and faces |
+## Why world?
 
-## Install
+Helix needs its worlds to be BDS's worlds. world reads and writes the LevelDB database, chunks and
+`level.dat` byte for byte the way the Bedrock Dedicated Server (BDS) does, so the same world works
+in BDS and in Helix: move it from one to the other and back, and nothing is lost or changed.
+
+Existing Go world readers aim to load and save worlds the game accepts, not to match BDS byte for
+byte, so we wrote our own. Owning the code also lets us optimize reading and writing for Helix
+(copy-on-write snapshots, batched writes, pluggable stores) without ever changing what ends up on
+disk.
+
+world is part of [Helix](https://github.com/helix-bedrock), an open-source Bedrock server engine in
+Go, but it does not depend on the engine and is a plain library that any Go project can use.
+
+## How it is checked
+
+The storage format comes from BDS 1.26.60: every LevelDB key it uses, the chunk tags and the
+encoding of each value. Worlds BDS saved are loaded and saved back, and the bytes are compared with
+BDS's own.
+
+## Quick Start
 
 ```bash
 go get github.com/helix-bedrock/world
 ```
 
-## Example
-
-`mcdb` needs a `chunk.BlockRegistry` that maps block states to runtime IDs; the
-engine provides one, tests use a small fake.
+`mcdb` needs a `chunk.BlockRegistry` that maps block states to runtime IDs to read chunks; the
+engine provides one, tests use a small fake. Level keys, players and `level.dat` open without one.
 
 ```go
 db, err := mcdb.Open("worlds/My World", blocks)
@@ -48,23 +60,45 @@ for it.Next() {
 return it.Error()
 ```
 
+## Packages
+
+| Package | What it has |
+|---|---|
+| [`leveldb`](leveldb) | LevelDB with Bedrock's zlib and raw deflate compression (goleveldb with fixes, no panics) |
+| [`chunk`](chunk) | Chunks and sub chunks in memory, palettes, block storage, disk and network encoding |
+| [`blockupgrader`](blockupgrader) | Upgrades block states saved by older Bedrock versions (pmmp's upgrade schemas) |
+| [`mcdb`](mcdb) | The world provider, one-to-one with BDS 1.26.60: chunks, entities, block entities, chunk metadata, level keys, players, plugin namespaces, 5-second batched writes; pluggable through `KV`, `WorldStore` and `PlayerStore` |
+| [`mcdb/leveldat`](mcdb/leveldat) | Reading and writing `level.dat`, keeping fields it does not know |
+| [`cube`](cube) | Block positions, height ranges and faces |
+
 ## Supported versions
 
-Chunks are written as Minecraft 1.26.52 writes them (chunk version 41, sub chunk
-version 9). Block states from older worlds are upgraded up to 1.26.50.
+Chunks are written as Minecraft 1.26.52 writes them (chunk version 41, sub chunk version 9). Block
+states from older worlds are upgraded up to 1.26.50.
 
-## Documentation
+## Roadmap
 
-API docs: <https://pkg.go.dev/github.com/helix-bedrock/world>
+What works today and what is left is in [STATUS.md](STATUS.md).
+
+| Part | State |
+|---|---|
+| LevelDB with Bedrock's compression | ✅ done |
+| Chunks, entities, block entities, chunk metadata | ✅ byte for byte with BDS 1.26.60 |
+| Level keys, players, plugin namespaces, `level.dat` | ✅ byte for byte with BDS 1.26.60 |
+| Pluggable stores | ✅ done |
+| Block state upgrading from older worlds | ✅ up to 1.26.50 |
+
+**The goal is to match the latest Minecraft version exactly.** After that, every time Minecraft
+updates, world will be updated to the new version. The project is maintained.
 
 ## Contributing
 
-See the [contributing guide](https://github.com/helix-bedrock/.github/blob/main/CONTRIBUTING.md).
-AI-assisted contributions follow the
-[AI policy](https://github.com/helix-bedrock/.github/blob/main/AI_POLICY.md).
+- **Found a bug or a difference from BDS?** Open an [issue](https://github.com/helix-bedrock/world/issues)
+- **Want to contribute code?** Read the [contributing guide](https://github.com/helix-bedrock/.github/blob/main/CONTRIBUTING.md)
+  and the [AI policy](https://github.com/helix-bedrock/.github/blob/main/AI_POLICY.md)
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE). Ported code and its sources (goleveldb, Dragonfly,
-worldupgrader, pmmp's schemas) are listed in [`CREDITS.md`](CREDITS.md); their
-licenses are in [`licenses/`](licenses).
+world is licensed under [MIT](LICENSE). Ported code and its sources (goleveldb, Dragonfly,
+worldupgrader, pmmp's schemas) are listed in [CREDITS.md](CREDITS.md); their licenses are in
+[`licenses/`](licenses). API docs: <https://pkg.go.dev/github.com/helix-bedrock/world>
