@@ -7,7 +7,7 @@
   Read and written byte for byte as BDS does, fast, low memory
 </p>
 
-[![Minecraft](https://img.shields.io/badge/minecraft-v1.26.60_(Bedrock)-black)](https://feedback.minecraft.net/hc/en-us/sections/360001186971-Release-Changelogs)
+[![Minecraft](https://img.shields.io/badge/minecraft-v1.26.60_%7C_1.26.62_(Bedrock)-black)](https://feedback.minecraft.net/hc/en-us/sections/360001186971-Release-Changelogs)
 [![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-in_development-orange)](STATUS.md)
@@ -73,8 +73,9 @@ return it.Error()
 
 ## Supported versions
 
-Chunks are written as Minecraft 1.26.52 writes them (chunk version 41, sub chunk version 9). Block
-states from older worlds are upgraded up to 1.26.50.
+Worlds are read and written as BDS 1.26.60 and 1.26.62 do. Chunks use chunk version 41 and sub chunk
+version 9, as Minecraft has written them since 1.26.52. Block states from older worlds are upgraded
+up to 1.26.50.
 
 ## Roadmap
 
