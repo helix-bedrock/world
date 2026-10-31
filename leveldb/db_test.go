@@ -1352,8 +1352,10 @@ func TestDB_CompactionTableOpenError(t *testing.T) {
 	}
 
 	h.stor.EmulateError(testutil.ModeOpen, storage.TypeTable, errors.New("open error during table compaction"))
+	// The goroutine may outlive this DB: h.openDB below replaces h.db.
+	db := h.db
 	go func() {
-		if err := h.db.CompactRange(util.Range{}); err != nil && !errors.Is(err, ErrClosed) {
+		if err := db.CompactRange(util.Range{}); err != nil && !errors.Is(err, ErrClosed) {
 			t.Error("CompactRange error: ", err)
 		}
 	}()
