@@ -573,6 +573,23 @@ func (db *DB) NewColumnIterator(r *IteratorRange) *ColumnIterator {
 	return it
 }
 
+// SaveLevelDat writes the level.dat as it is now, so a server that is killed loses little. It goes
+// to a new file first, so being killed in the middle cannot ruin the one there. Do not change
+// LevelDat while it runs.
+func (db *DB) SaveLevelDat() error {
+	if err := db.ldatFile.Marshal(*db.ldat); err != nil {
+		return fmt.Errorf("save level.dat: %w", err)
+	}
+	path := filepath.Join(db.dir, "level.dat")
+	if err := db.ldatFile.WriteFile(path + ".new"); err != nil {
+		return fmt.Errorf("save level.dat: %w", err)
+	}
+	if err := os.Rename(path+".new", path); err != nil {
+		return fmt.Errorf("save level.dat: %w", err)
+	}
+	return nil
+}
+
 // Close flushes buffered writes and closes the provider, saving any file
 // that might need to be saved, such as the level.dat.
 func (db *DB) Close() error {
@@ -584,9 +601,7 @@ func (db *DB) Close() error {
 	if err := db.Flush(); err != nil {
 		errs = append(errs, fmt.Errorf("close: %w", err))
 	}
-	if err := db.ldatFile.Marshal(*db.ldat); err != nil {
-		errs = append(errs, fmt.Errorf("close: %w", err))
-	} else if err := db.ldatFile.WriteFile(filepath.Join(db.dir, "level.dat")); err != nil {
+	if err := db.SaveLevelDat(); err != nil {
 		errs = append(errs, fmt.Errorf("close: %w", err))
 	}
 	if err := os.WriteFile(filepath.Join(db.dir, "levelname.txt"), []byte(db.ldat.LevelName), 0o644); err != nil { //nolint:gosec // world files are meant to be readable
