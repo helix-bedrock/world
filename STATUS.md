@@ -1,6 +1,6 @@
 # What world does
 
-Status as of 2026-10-31: **in development.** Storage is one-to-one with BDS 1.26.60: a world BDS
+Status as of 2026-11-09: **in development.** Storage is one-to-one with BDS 1.26.60: a world BDS
 saved loads and saves back byte for byte.
 
 ## What works

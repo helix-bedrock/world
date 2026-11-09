@@ -195,7 +195,7 @@ func (d *Data) FillDefault() {
 	d.LANBroadcastIntent = true
 	d.LastOpenedWithVersion = versionArray(protocol.CurrentVersion)
 	d.LevelName = "World"
-	d.LightningLevel = 1.0
+	d.LightningLevel = 0
 	d.LimitedWorldDepth = 16
 	d.LimitedWorldOriginY = math.MaxInt16
 	d.LimitedWorldWidth = 16
@@ -210,7 +210,7 @@ func (d *Data) FillDefault() {
 	d.PVP = true
 	d.Platform = 2
 	d.PlatformBroadcastIntent = 3
-	d.RainLevel = 1.0
+	d.RainLevel = 0
 	d.RandomSeed = time.Now().Unix()
 	d.RandomTickSpeed = 1
 	d.RespawnBlocksExplode = true
