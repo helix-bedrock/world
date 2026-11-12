@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/helix-bedrock/protocol/nbt"
@@ -45,8 +46,18 @@ type DB struct {
 	// ldatFile keeps every level.dat field, including ones Data does not
 	// know, so they are written back unchanged.
 	ldatFile *leveldat.LevelDat
+	// owners is the chunk whose digp record last listed each entity this run, so a chunk an
+	// entity walked out of does not delete the record the chunk it walked into now holds.
+	owners entityOwners
 
 	stop, stopped chan struct{}
+}
+
+// entityOwners maps entity IDs to the chunk (its digp key) that last stored them. Runs: any
+// goroutine.
+type entityOwners struct {
+	mu sync.Mutex
+	m  map[int64]string
 }
 
 // Open opens the world in dir with the block registry passed and default
@@ -296,6 +307,12 @@ func (db *DB) entities(k dbKey, ver byte) ([]chunk.Entity, error) {
 	for i := 0; i < len(ids); i += actorKeySize {
 		id := actorIDFromKey(ids[i : i+actorKeySize])
 		data, err := db.buf.get(entityIndex(id))
+		if errors.Is(err, leveldb.ErrNotFound) {
+			// A record another chunk's save deleted (an entity that walked between chunks,
+			// before Helix kept track of that): skip it rather than lose every entity here.
+			db.conf.Log.Debug("read entity: no record", "ID", id)
+			continue
+		}
 		if err != nil {
 			db.conf.Log.Error("read entity: "+err.Error(), "ID", id)
 			return nil, err
@@ -500,11 +517,26 @@ func (db *DB) storeEntities(t *txn, k dbKey, entities []chunk.Entity) {
 		newIDs = append(newIDs, e.ID)
 		ids = appendActorKey(ids, e.ID)
 	}
-	for _, id := range previousIDs {
-		if !slices.Contains(newIDs, id) {
-			t.Delete(entityIndex(id))
-		}
+	owner := string(idsKey)
+	db.owners.mu.Lock()
+	if db.owners.m == nil {
+		db.owners.m = map[int64]string{}
 	}
+	for _, id := range newIDs {
+		db.owners.m[id] = owner
+	}
+	for _, id := range previousIDs {
+		if slices.Contains(newIDs, id) {
+			continue
+		}
+		if o, ok := db.owners.m[id]; ok && o != owner {
+			// It walked into another chunk, which holds its record now.
+			continue
+		}
+		delete(db.owners.m, id)
+		t.Delete(entityIndex(id))
+	}
+	db.owners.mu.Unlock()
 	t.Put(idsKey, ids)
 	t.Put(k.Sum(keyActorDigestVersion), []byte{0})
 }
