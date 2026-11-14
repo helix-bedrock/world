@@ -48,6 +48,8 @@ var (
 	ErrClosed = errors.New("store: closed")
 	// ErrCorrupt is wrapped by every error about damaged data.
 	ErrCorrupt = errors.New("store: corrupt")
+	// ErrReadOnly is returned by writes to a store opened ReadOnly.
+	ErrReadOnly = errors.New("store: opened read-only")
 	// ErrReleased is returned by a snapshot after Release.
 	ErrReleased = errors.New("store: snapshot released")
 )
@@ -58,6 +60,8 @@ func errCorrupt(path, what string) error {
 
 // castagnoli returns the CRC-32C table; the standard library builds it once.
 func castagnoli() *crc32.Table { return crc32.MakeTable(crc32.Castagnoli) }
+
+func crc32Of(b []byte) uint32 { return crc32.Checksum(b, castagnoli()) }
 
 func alignUp(n uint64) uint64 { return (n + recordAlign - 1) &^ (recordAlign - 1) }
 

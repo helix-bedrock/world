@@ -50,6 +50,9 @@ func (d *DB) writable() error {
 	if d.closed {
 		return ErrClosed
 	}
+	if d.opts.ReadOnly {
+		return ErrReadOnly
+	}
 	return d.bgErr
 }
 

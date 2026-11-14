@@ -20,6 +20,8 @@ type Round struct {
 	newPlayers map[PlayerIDs]playerLookup
 	// levelDat is set when the round writes level.dat.
 	levelDat []byte
+	// restoreFrom is the last world RestoreChunk checked the block table of.
+	restoreFrom *World
 }
 
 // NewRound returns an empty round for w.

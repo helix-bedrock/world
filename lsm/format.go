@@ -14,6 +14,9 @@ var ErrNotFound = errors.New("lsm: not found")
 // ErrClosed is returned by calls on a closed database.
 var ErrClosed = errors.New("lsm: closed")
 
+// ErrReadOnly is returned by writes to a database opened ReadOnly.
+var ErrReadOnly = errors.New("lsm: opened read-only")
+
 // kind is what an internal key records: a value or a deletion.
 type kind uint8
 

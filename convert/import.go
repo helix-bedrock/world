@@ -40,14 +40,15 @@ func (o Options) withDefaults() Options {
 // Import converts the BDS world in bdsDir (the folder holding db/ and
 // level.dat) into a new Helix world in hxDir. hxDir must not hold a world.
 //
-// The BDS world's data is not changed, but opening its database writes a
-// new manifest, as LevelDB does; convert a copy if BDS must not see that.
+// The BDS world is opened read-only and not changed at all, so a world BDS
+// is not running can be converted in place. (While BDS runs, its newest
+// writes may still be in memory: stop it or use save hold first.)
 func Import(bdsDir, hxDir string, opts Options) error {
 	opts = opts.withDefaults()
 	if _, err := os.Stat(filepath.Join(hxDir, hx.MetaFile)); err == nil {
 		return fmt.Errorf("convert: %s already holds a Helix world", hxDir)
 	}
-	db, err := lsm.Open(filepath.Join(bdsDir, "db"), lsm.Options{})
+	db, err := lsm.Open(filepath.Join(bdsDir, "db"), lsm.Options{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("convert: open BDS world: %w", err)
 	}

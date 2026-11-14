@@ -128,13 +128,7 @@ func (sn *Snapshot) Get(id FileID, key, dst []byte) ([]byte, error) {
 	defer hf.releaseRead()
 	// The current index first, then the notes: a round notes a key before it
 	// changes it, so a change made between the two is in the notes.
-	e, f, ok := hf.find(key)
-	if o, seen := sn.noted(hf, key); seen {
-		e, ok = o.e, o.ok
-		hf.mu.RLock()
-		f = hf.f
-		hf.mu.RUnlock()
-	}
+	e, f, ok := sn.entry(hf, key)
 	if !ok {
 		return dst[:0], ErrNotFound
 	}

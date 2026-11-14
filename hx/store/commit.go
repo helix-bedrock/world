@@ -62,6 +62,9 @@ func (s *Store) Commit(b *Batch) (uint64, error) {
 	if err := s.usable(); err != nil {
 		return 0, err
 	}
+	if s.opts.ReadOnly {
+		return 0, ErrReadOnly
+	}
 	if err := s.validate(b); err != nil {
 		return 0, err
 	}
@@ -104,6 +107,8 @@ func (s *Store) validate(b *Batch) error {
 			return errors.New("store: record kind 0 is reserved")
 		case o.open != nil && o.size < 0:
 			return errors.New("store: negative stream size")
+		case o.raw && !o.rawh.valid():
+			return errRawHeader
 		}
 		if _, err := s.fileOf(o.file); err != nil {
 			return err
@@ -172,6 +177,28 @@ func (s *Store) writeFile(hf *hxFile, b *Batch, ops []op, round uint64) error {
 		switch {
 		case o.del:
 			w.recs = append(w.recs, pendingRec{file: hf, key: key, del: true})
+		case o.raw && o.open != nil:
+			e, err := s.writeRawStream(hf, o, key, round)
+			if err != nil {
+				return err
+			}
+			w.recs = append(w.recs, pendingRec{file: hf, key: key, e: e})
+		case o.raw:
+			var (
+				e   entry
+				err error
+			)
+			w.run, e, err = appendRawRecord(w.run, key, o.rawh, b.value(o), round)
+			if err != nil {
+				return err
+			}
+			w.recs = append(w.recs, pendingRec{file: hf, key: key, e: e, inRun: true})
+			if len(w.run) >= maxRun {
+				if err := s.flushRun(hf, runFrom); err != nil {
+					return err
+				}
+				runFrom = len(w.recs)
+			}
 		case o.open != nil:
 			e, err := s.writeStream(hf, o, key, round)
 			if err != nil {

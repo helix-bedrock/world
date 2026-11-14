@@ -14,8 +14,9 @@ import (
 
 // level.dat is kept in world.hx, so it is saved in the same round as the
 // chunks and players it goes with; each round that changes it also copies it
-// to the world's level.dat file, which BDS tools read. A world without the
-// record (just converted, or made by hand) is read from the file.
+// to the world's level.dat file, which BDS tools read. Open copies the file
+// into world.hx if world.hx has none; until then (a world opened read-only)
+// reads fall back to the file.
 
 // LevelDatBytes reads level.dat as stored, header included, into dst[:0].
 func (v view) LevelDatBytes(dst []byte) ([]byte, error) {

@@ -208,6 +208,9 @@ func (w *World) openFiles() error {
 	if err := w.checkFormat(); err != nil {
 		return err
 	}
+	if err := w.adoptLevelDat(); err != nil {
+		return err
+	}
 	t, err := LoadBlockTable(w.s, w.blocks, w.conf.Blocks, w.conf.Upgrader)
 	if err != nil {
 		return fmt.Errorf("hx: open world: %w", err)
@@ -219,6 +222,9 @@ func (w *World) openFiles() error {
 // checkFormat reads the format version, writing it to a new world.
 func (w *World) checkFormat() error {
 	v, err := w.s.Get(w.meta, metaFormatKey, nil)
+	if errors.Is(err, store.ErrNotFound) && w.conf.Store.ReadOnly {
+		return errors.New("hx: open world: not a Helix world")
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		var b store.Batch
 		b.Put(w.meta, KindMeta, metaFormatKey, binary.LittleEndian.AppendUint32(nil, formatVersion))
@@ -235,6 +241,31 @@ func (w *World) checkFormat() error {
 	}
 	if got := binary.LittleEndian.Uint32(v); got > formatVersion {
 		return fmt.Errorf("hx: world format %d is newer than this version reads (%d)", got, formatVersion)
+	}
+	return nil
+}
+
+// adoptLevelDat copies the level.dat file into world.hx when world.hx has
+// none yet (a world just converted, or made by hand), so snapshots and
+// backups see the level.dat that goes with their round.
+func (w *World) adoptLevelDat() error {
+	if w.conf.Store.ReadOnly {
+		return nil
+	}
+	if _, err := w.s.Stat(w.meta, metaLevelDatKey); !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	b, err := os.ReadFile(w.LevelDatPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("hx: read level.dat: %w", err)
+	}
+	var batch store.Batch
+	batch.Put(w.meta, KindMeta, metaLevelDatKey, b)
+	if _, err := w.s.Commit(&batch); err != nil {
+		return fmt.Errorf("hx: store level.dat: %w", err)
 	}
 	return nil
 }

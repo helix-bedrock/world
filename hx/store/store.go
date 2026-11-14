@@ -22,6 +22,10 @@ type Options struct {
 	// JournalLimit is how big the journal may grow before every file is
 	// checkpointed and the journal emptied (default 64 MB).
 	JournalLimit int64
+	// ReadOnly opens the store without writing anything to it: rounds in the
+	// journal are replayed in memory only, and Commit and Checkpoint return
+	// ErrReadOnly. For backups opened as worlds and for tools.
+	ReadOnly bool
 
 	fs fsys
 }
@@ -83,8 +87,10 @@ type Store struct {
 func Open(dir string, opts Options) (*Store, error) {
 	opts = opts.withDefaults()
 	s := &Store{dir: dir, opts: opts, fs: opts.fs, byPath: map[string]FileID{}}
-	if err := s.fs.MkdirAll(filepath.Join(dir, journalDir)); err != nil {
-		return nil, fmt.Errorf("store: create %s: %w", dir, err)
+	if !opts.ReadOnly {
+		if err := s.fs.MkdirAll(filepath.Join(dir, journalDir)); err != nil {
+			return nil, fmt.Errorf("store: create %s: %w", dir, err)
+		}
 	}
 	c, err := newCodec(opts.Level)
 	if err != nil {
@@ -117,6 +123,9 @@ func (s *Store) recover() error {
 		}
 	}
 	s.round = max(s.round, s.maxRound.Load())
+	if s.opts.ReadOnly {
+		return nil
+	}
 	if err := s.checkpointDirty(); err != nil {
 		return err
 	}
@@ -210,11 +219,15 @@ type Info struct {
 	Kind byte
 	// Size is the body's length.
 	Size int64
+	// Stored is the body's length on disk.
+	Stored int64
 	// Round is the save round that wrote it.
 	Round uint64
 }
 
-func (e entry) info() Info { return Info{Kind: e.kind, Size: int64(e.raw), Round: e.round} } //nolint:gosec // record sizes
+func (e entry) info() Info {
+	return Info{Kind: e.kind, Size: int64(e.raw), Stored: int64(e.size) - recHeaderLen - int64(e.keyLen), Round: e.round} //nolint:gosec // record sizes
+}
 
 // Get returns key's body in dst[:0], growing dst only if it is too small, or
 // ErrNotFound. With a big enough dst it allocates nothing.
@@ -362,6 +375,9 @@ func (s *Store) Checkpoint() error {
 	if err := s.usable(); err != nil {
 		return err
 	}
+	if s.opts.ReadOnly {
+		return ErrReadOnly
+	}
 	return s.checkpointAll()
 }
 
@@ -440,10 +456,12 @@ func (s *Store) Close() error {
 		return nil
 	}
 	var errs []error
-	if s.failed == nil {
+	if s.failed == nil && !s.opts.ReadOnly {
 		errs = append(errs, s.checkpointAll())
 	}
-	errs = append(errs, s.j.close())
+	if s.j != nil {
+		errs = append(errs, s.j.close())
+	}
 	s.closeFiles()
 	s.codec.close()
 	return errors.Join(errs...)

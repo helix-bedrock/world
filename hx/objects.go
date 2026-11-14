@@ -372,8 +372,8 @@ func (ow *ObjectsWriter) Close() error {
 
 // storedPayloads returns how many payloads the committed objects record of a
 // chunk has, reading it into *scratch.
-func (w *World) storedPayloads(dim Dimension, pos ChunkPos, scratch *[]byte) (uint32, error) {
-	rec, err := w.ObjectsRecord(dim, pos, *scratch)
+func (v view) storedPayloads(dim Dimension, pos ChunkPos, scratch *[]byte) (uint32, error) {
+	rec, err := v.ObjectsRecord(dim, pos, *scratch)
 	*scratch = rec
 	if errors.Is(err, store.ErrNotFound) {
 		return 0, nil

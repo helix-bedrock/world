@@ -3,8 +3,13 @@ package convert
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync/atomic"
+	"time"
 	"testing"
 
 	"github.com/helix-bedrock/protocol/nbt"
@@ -114,6 +119,56 @@ func testBDSWorld(t *testing.T, dir string) {
 	}
 }
 
+// heapWatch samples the heap in use, keeping the highest value.
+type heapWatch struct {
+	max  atomic.Uint64
+	done chan struct{}
+}
+
+func watchHeap() *heapWatch {
+	h := &heapWatch{done: make(chan struct{})}
+	go func() {
+		var ms runtime.MemStats
+		tick := time.NewTicker(50 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-h.done:
+				return
+			case <-tick.C:
+				runtime.ReadMemStats(&ms)
+				if ms.HeapInuse > h.max.Load() {
+					h.max.Store(ms.HeapInuse)
+				}
+			}
+		}
+	}()
+	return h
+}
+
+// take returns the peak since the last take.
+func (h *heapWatch) take() uint64 { return h.max.Swap(0) }
+
+func (h *heapWatch) stop() { close(h.done) }
+
+// listDir returns the names, sizes and change times of a folder's files.
+func listDir(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]string{}
+	for _, e := range ents {
+		fi, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m[e.Name()] = fmt.Sprint(fi.Size(), fi.ModTime().UnixNano())
+	}
+	return m
+}
+
 // sameDB checks two databases hold the same keys and values.
 func sameDB(t *testing.T, a, b string) int {
 	t.Helper()
@@ -155,8 +210,12 @@ func TestRoundTrip(t *testing.T) {
 	src, hxDir, out := t.TempDir(), t.TempDir(), t.TempDir()
 	testBDSWorld(t, src)
 	opts := Options{Store: store.Options{NoSync: true}, RoundSize: 256 << 10}
+	before := listDir(t, filepath.Join(src, "db"))
 	if err := Import(src, hxDir, opts); err != nil {
 		t.Fatal(err)
+	}
+	if after := listDir(t, filepath.Join(src, "db")); !maps.Equal(before, after) {
+		t.Fatalf("Import changed the BDS database: %v -> %v", before, after)
 	}
 	if err := Export(hxDir, out, opts); err != nil {
 		t.Fatal(err)
@@ -223,13 +282,20 @@ func TestBDSWorld(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := Options{Store: store.Options{NoSync: true}}
+	peak := watchHeap()
+	start := time.Now()
 	if err := Import(cp, hxDir, opts); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("import %v, peak heap %d MB", time.Since(start).Round(time.Millisecond), peak.take()>>20)
+	start = time.Now()
 	if err := Export(hxDir, out, opts); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%d keys identical", sameDB(t, filepath.Join(cp, "db"), filepath.Join(out, "db")))
+	t.Logf("export %v, peak heap %d MB", time.Since(start).Round(time.Millisecond), peak.take()>>20)
+	start = time.Now()
+	t.Logf("%d keys identical (compare %v, peak heap %d MB)", sameDB(t, filepath.Join(cp, "db"), filepath.Join(out, "db")), time.Since(start).Round(time.Millisecond), peak.take()>>20)
+	peak.stop()
 	w, err := hx.Open(hxDir, hx.Config{Store: opts.Store})
 	if err != nil {
 		t.Fatal(err)

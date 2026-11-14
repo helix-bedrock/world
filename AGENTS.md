@@ -32,7 +32,8 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   `table/stream.go`). See `CREDITS.md` for the full list.
 - `lsm`: Helix's own engine for the same files (replacing `leveldb` step by
   step): log, manifest, tables with raw deflate blocks and LevelDB's bloom
-  filter, a pointer-free arena memtable, snapshot reads that never wait for
+  filter, a pointer-free arena memtable, a `ReadOnly` open that writes
+  nothing (the converter reads BDS worlds with it), snapshot reads that never wait for
   writes, big values streamed into tables of their own and copied as stored
   by compaction, a small-block cache. Checked against `leveldb` both ways and
   on BDS worlds (`TestBDSWorld`, `LSM_BDS_WORLD`).
@@ -42,7 +43,8 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   within a byte budget, save rounds made atomic across files by one journal,
   checkpoints to A/B superblocks, generations so freed space is reused only
   when no read can see it, streamed big records, snapshots of one round
-  across every file (`snapshot.go`). Reads and steady-state
+  across every file (`snapshot.go`), records copied as stored (`raw.go`),
+  `ReadOnly` opens. Reads and steady-state
   rounds must stay at 0 allocations (`bench_test.go`). `TestCrash` stops a
   fake disk (`memfs_test.go`) at random moments, losing or tearing unforced
   writes; any change to write order must keep it passing.
@@ -54,7 +56,11 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   block entities, ticks and entities as BDS stores them), and the world
   provider (`world.go`: regions of 32x32 chunks, reads shared by World and
   Snapshot through `view`; `round.go`: save rounds, atomic across files;
-  `players.go`: BDS's player keys; `leveldat.go`: level.dat in world.hx).
+  `players.go`: BDS's player keys; `leveldat.go`: level.dat in world.hx)
+  and live backups (`backup.go`: from a snapshot to a `BackupTarget`, full
+  or incremental, paced; `backup_dir.go`: backup folders, `Restore`,
+  `Round.RestoreChunk` into a running world; `backup_archive.go`: one-stream
+  archives).
   Block entities and entities are shells with fields over 512 bytes cut
   into payload records (`objects.go`) until 4 KB is left; splicing them
   back must give BDS's bytes. Decoding a terrain record and a warm terrain

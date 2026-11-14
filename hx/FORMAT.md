@@ -41,6 +41,7 @@ record.
 | 5 | player record (`players.hx`) |
 | 6 | world metadata (`world.hx`) |
 | 7 | payload: a field cut out of a shell |
+| 8 | key list of an incremental backup (`backup.hx`) |
 
 ## Block table (`blocks.hx`)
 
@@ -196,3 +197,32 @@ A snapshot (`Store.Snapshot`) is the store as of one round, kept in memory
 only: it pins that round's generation, so no record it can see is reused,
 and each later round notes, before changing a key, what the key held. A
 snapshot read looks at those notes, then at the current index.
+
+A store opened `ReadOnly` replays its journal in memory and writes nothing.
+
+## Backups
+
+A backup copies records as stored (`Snapshot.ReadRaw`/`OpenRaw` into
+`Batch.PutRaw`/`PutRawStream`): compressed body and body checksum unchanged,
+the header rewritten with the round of the commit that writes the copy. The
+commit checks every copied body against its checksum.
+
+**Backup folder** (`DirTarget`): the world's store files with the records
+copied, its plain files (`level.dat` from the snapshot, `bds/...`), and last
+`backup.json` (`BackupInfo`: format, round shown, round it builds on, time,
+record and byte counts). A full backup (`since` 0) is a world and opens as
+one. An incremental backup holds only records written after round `since`,
+plus `backup.hx`: one record (kind 8) per store file of the world, keyed by
+the file's path, whose body is every key the file held (uvarint length and
+bytes, repeated); a file without one held no keys. `Restore` applies a full
+backup, then each incremental one, deleting keys its lists leave out.
+
+**Archive** (`ArchiveWriter`, `ReadArchive`): `HXBK\x01`, then frames, each
+a type byte. Strings and byte fields are a uvarint length and the bytes.
+
+| Type | Frame | Fields |
+| --- | --- | --- |
+| 1 | record | file, key, kind (byte), compression (byte), size decompressed (uvarint), stored size (uvarint), body CRC-32C (u32 LE), stored body |
+| 2 | keys | file, key list (as in `backup.hx`) |
+| 3 | plain file | name, size (uvarint), bytes |
+| 4 | finish | `BackupInfo` JSON, then CRC-32C (u32 LE) of every byte of the stream before it |

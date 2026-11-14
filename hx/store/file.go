@@ -112,7 +112,11 @@ func (hf *hxFile) load(s *Store) error {
 }
 
 func (hf *hxFile) open(s *Store) error {
-	f, err := s.fs.OpenFile(hf.full, os.O_RDWR)
+	flag := os.O_RDWR
+	if s.opts.ReadOnly {
+		flag = os.O_RDONLY
+	}
+	f, err := s.fs.OpenFile(hf.full, flag)
 	if errors.Is(err, fs.ErrNotExist) {
 		hf.ix, hf.sp = index{}, emptySpace()
 		return nil

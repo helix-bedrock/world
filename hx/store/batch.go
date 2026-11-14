@@ -28,6 +28,9 @@ type op struct {
 	file   FileID
 	kind   byte
 	del    bool
+	// raw is set for a record copied as stored (PutRaw), described by rawh.
+	raw  bool
+	rawh RawHeader
 }
 
 // Put stores value under key in file f, with kind (1 to 255) saying what it is.

@@ -22,6 +22,9 @@ const (
 	maxCommitLen    = 1 << 30
 )
 
+// JournalDir is the folder of a store's journal, inside the store's folder.
+const JournalDir = journalDir
+
 // Operations in a commit body.
 const (
 	opPut byte = 1

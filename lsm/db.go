@@ -34,6 +34,10 @@ type Options struct {
 	// Pace, if set, is called by flushes and compactions after writing each block, with
 	// its stored size; it may sleep to slow background work down.
 	Pace func(n int)
+	// ReadOnly opens an existing database without writing anything to it, so a
+	// world BDS owns is never changed: logs are replayed into memory, no
+	// manifest or log is started, and writes return ErrReadOnly.
+	ReadOnly bool
 }
 
 func (o Options) withDefaults() Options {
@@ -110,7 +114,11 @@ type DB struct {
 // Open opens or creates the database in dir.
 func Open(dir string, opts Options) (*DB, error) {
 	opts = opts.withDefaults()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if opts.ReadOnly {
+		if _, err := os.Stat(filepath.Join(dir, currentName)); err != nil {
+			return nil, fmt.Errorf("lsm: open %s read-only: %w", dir, err)
+		}
+	} else if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("lsm: create %s: %w", dir, err)
 	}
 	cacheBudget := max(opts.BlockCache, 0)
@@ -130,8 +138,10 @@ func Open(dir string, opts Options) (*DB, error) {
 		d.tables.close()
 		return nil, err
 	}
-	d.bg.Add(1)
-	go d.background()
+	if !opts.ReadOnly {
+		d.bg.Add(1)
+		go d.background()
+	}
 	return d, nil
 }
 
@@ -151,6 +161,9 @@ func (d *DB) recover() error {
 	}
 	if err := d.replayLogs(&edit); err != nil {
 		return err
+	}
+	if d.opts.ReadOnly {
+		return nil
 	}
 	return d.startFresh(&edit)
 }
@@ -213,6 +226,10 @@ func (d *DB) replayLogs(edit *versionEdit) error {
 		return err
 	}
 	mem := newMemtable(d.opts.WriteBuffer)
+	if d.opts.ReadOnly {
+		// Nothing is written: what the logs hold stays in memory.
+		d.mem = mem
+	}
 	for _, num := range nums {
 		d.next = max(d.next, num+1)
 		if num < d.logNum {
@@ -222,7 +239,7 @@ func (d *DB) replayLogs(edit *versionEdit) error {
 			return err
 		}
 	}
-	if !mem.empty() {
+	if !mem.empty() && !d.opts.ReadOnly {
 		return d.writeLevel0(mem, edit)
 	}
 	return nil
@@ -247,7 +264,7 @@ func (d *DB) replayLog(num uint64, mem **memtable, edit *versionEdit) error {
 		if err := d.replayRecord(rec, *mem); err != nil {
 			return fmt.Errorf("lsm: read log %d: %w", num, err)
 		}
-		if (*mem).size() >= d.opts.WriteBuffer {
+		if (*mem).size() >= d.opts.WriteBuffer && !d.opts.ReadOnly {
 			if err := d.writeLevel0(*mem, edit); err != nil {
 				return err
 			}
