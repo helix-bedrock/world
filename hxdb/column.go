@@ -335,7 +335,7 @@ func (db *DB) StoreColumn(pos mcdb.ChunkPos, dim mcdb.Dimension, col *chunk.Colu
 	}
 	// Containers' slots are written first, outside the lock, in rounds of their own: they
 	// may be gigabytes, and the round every store shares must stay small.
-	bes, err := db.splitContainers(&s.split, hx.Dimension(dim), hx.ChunkPos(pos), col)
+	bes, err := db.splitContainers(&s.split, hx.Dimension(dim), hx.ChunkPos(pos), col, nil)
 	if err != nil {
 		return fmt.Errorf("hxdb: store column %v (%v): %w", pos, dim, err)
 	}

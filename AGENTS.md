@@ -82,7 +82,9 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   `RoundSize` (so a save of chests of gigabytes holds about one round in memory); reads put
   `Items` back (whole, or light from the summary for `Config.LightItems` ids in
   `EachBlockEntity`); export puts them back, `RestoreChunk` copies them. A store waits while
-  the shared round is over twice `RoundSize` (`waitForRoom`). `KeepBlockEntities` keeps shells and their payloads as stored
+  the shared round is over twice `RoundSize` (`waitForRoom`). `StoreLinked` (mcdb's optional
+  `LinkedStore`) stores a column and players in one commit, after committing everything older,
+  so items moved between a player and a container never land on one side only. `KeepBlockEntities` keeps shells and their payloads as stored
   (`ObjectsWriter.KeepBlockEntity`). Chunks only shown load in a stage of
   their own: `LoadTerrain` (no objects) and `EachBlockEntityView` (block
   entities without the fields named, a cut field's payload read only for

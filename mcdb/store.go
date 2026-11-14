@@ -70,6 +70,19 @@ type PlayerStore interface {
 	StorePlayer(ids PlayerIDs, data map[string]any) error
 }
 
+// LinkedStore stores a chunk column and players in one step: they land on disk together or
+// not at all, so items moved between a player and a container are never saved on both sides
+// or neither. Optional: a store without it stores them one at a time.
+type LinkedStore interface {
+	StoreLinked(pos ChunkPos, dim Dimension, col *chunk.Column, players []LinkedPlayer) error
+}
+
+// LinkedPlayer is a player's data to store with a chunk.
+type LinkedPlayer struct {
+	IDs  PlayerIDs
+	Data map[string]any
+}
+
 // PlayerIDs are the IDs a player logs in with. BDS writes a lookup record
 // for each one that is set.
 type PlayerIDs struct {

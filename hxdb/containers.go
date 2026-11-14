@@ -10,6 +10,7 @@ import (
 	"github.com/helix-bedrock/world/chunk"
 	"github.com/helix-bedrock/world/cube"
 	"github.com/helix-bedrock/world/hx"
+	"github.com/helix-bedrock/world/mcdb"
 )
 
 // Containers are stored split (hx/slots.go): a block entity's Items list goes out as one
@@ -89,15 +90,26 @@ type splitScratch struct {
 	slotNums []uint8
 	kept     map[cube.Pos]bool
 	bes      []chunk.BlockEntity
-	side     *hx.Round
+	// side is the round records go into: own, or a linked store's.
+	side, own *hx.Round
+	linked    bool
 }
 
 // splitContainers writes the slot and summary records of the column's containers in side
 // rounds, removes those of containers gone or no longer split, and returns the block
 // entities to store, with the split ones' Items left out. The caller's maps are not changed.
-func (db *DB) splitContainers(sc *splitScratch, dim hx.Dimension, pos hx.ChunkPos, col *chunk.Column) ([]chunk.BlockEntity, error) {
-	if sc.side == nil {
-		sc.side = db.w.NewRound()
+//
+// With into set (db.mu held), every record goes into that round instead and nothing is
+// committed here: a linked store commits them together with what else it writes.
+func (db *DB) splitContainers(sc *splitScratch, dim hx.Dimension, pos hx.ChunkPos, col *chunk.Column, into *hx.Round) ([]chunk.BlockEntity, error) {
+	sc.linked = into != nil
+	if sc.linked {
+		sc.side = into
+	} else {
+		if sc.own == nil {
+			sc.own = db.w.NewRound()
+		}
+		sc.side = sc.own
 	}
 	if sc.kept == nil {
 		sc.kept = map[cube.Pos]bool{}
@@ -278,14 +290,14 @@ func (db *DB) dropGoneContainers(sc *splitScratch, dim hx.Dimension, pos hx.Chun
 
 // maybeCommitSide commits the side round once it holds a round's worth.
 func (db *DB) maybeCommitSide(sc *splitScratch) error {
-	if sc.side.Size() < db.conf.RoundSize {
+	if sc.linked || sc.side.Size() < db.conf.RoundSize {
 		return nil
 	}
 	return db.commitSide(sc)
 }
 
 func (db *DB) commitSide(sc *splitScratch) error {
-	if sc.side.Len() == 0 {
+	if sc.linked || sc.side.Len() == 0 {
 		return nil
 	}
 	if _, err := db.w.Commit(sc.side); err != nil {
@@ -315,4 +327,56 @@ func (db *DB) decodeWithItems(s *scratch, dim hx.Dimension, pos hx.ChunkPos, c [
 		return m, nil
 	}
 	return nbt.DecodeWithout(whole, nbt.LittleEndian, nil)
+}
+
+// StoreLinked stores a chunk column and players in one commit, so they land on disk together
+// or not at all: items a player moved into or out of a container in that chunk are then never
+// on disk in both places, or in neither, whatever stops the server. Everything stored before
+// is committed first, so nothing older lands after it.
+func (db *DB) StoreLinked(pos mcdb.ChunkPos, dim mcdb.Dimension, col *chunk.Column, players []mcdb.LinkedPlayer) error {
+	if db.conf.Blocks == nil {
+		return fmt.Errorf("hxdb: store linked %v: no block registry", pos)
+	}
+	if _, ok := dim.Range(); !ok {
+		return fmt.Errorf("hxdb: store linked %v: unknown dimension %v", pos, dim)
+	}
+	if col == nil || col.Chunk == nil {
+		return fmt.Errorf("hxdb: store linked %v (%v): no chunk", pos, dim)
+	}
+	if err := db.Flush(); err != nil {
+		return err
+	}
+	s := db.getScratch()
+	defer db.putScratch(s)
+	if err := db.terrainKeys(s, dim, col); err != nil {
+		return fmt.Errorf("hxdb: store linked %v (%v): %w", pos, dim, err)
+	}
+	if err := db.storeLinked(s, pos, dim, col, players); err != nil {
+		return fmt.Errorf("hxdb: store linked %v (%v): %w", pos, dim, err)
+	}
+	return db.Flush()
+}
+
+// storeLinked puts the column and the players in the shared round under one hold of db.mu,
+// so no flush splits them.
+func (db *DB) storeLinked(s *scratch, pos mcdb.ChunkPos, dim mcdb.Dimension, col *chunk.Column, players []mcdb.LinkedPlayer) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	bes, err := db.splitContainers(&s.split, hx.Dimension(dim), hx.ChunkPos(pos), col, db.round)
+	if err != nil {
+		return err
+	}
+	split := *col
+	split.BlockEntities = bes
+	if err := db.storeColumn(s, hx.Dimension(dim), hx.ChunkPos(pos), &split); err != nil {
+		return err
+	}
+	db.held.chunks[chunkID{dim, pos}] = struct{}{}
+	for _, p := range players {
+		if err := db.round.PutPlayer(hx.PlayerIDs(p.IDs), p.Data); err != nil {
+			return err
+		}
+		db.held.players[p.IDs] = struct{}{}
+	}
+	return nil
 }
