@@ -113,6 +113,13 @@ func TestStoreLoadColumn(t *testing.T) {
 	cols := map[Dimension]*chunk.Column{}
 	for i, dim := range []Dimension{Overworld, Nether, End} {
 		cols[dim] = testColumn(dim, i)
+		// Ticks are kept only inside their chunk, so move them there.
+		for _, list := range [][]chunk.ScheduledBlockUpdate{cols[dim].ScheduledBlocks, cols[dim].RandomTicks} {
+			for j := range list {
+				list[j].Pos[0] += (i - 5) << 4
+				list[j].Pos[2] += 7 << 4
+			}
+		}
 		if err := db.StoreColumn(ChunkPos{int32(i) - 5, 7}, dim, cols[dim]); err != nil {
 			t.Fatal(err)
 		}

@@ -410,23 +410,12 @@ func (db *DB) scheduledUpdates(rd *chunkReader, k dbKey, tag byte) ([]chunk.Sche
 	if err != nil {
 		return nil, 0, err
 	}
-	var m scheduledUpdates
-	if err := nbt.UnmarshalEncoding(data, &m, nbt.LittleEndian); err != nil {
-		return nil, 0, fmt.Errorf("read nbt: %w", err)
+	r, ok := k.dim.Range()
+	if !ok {
+		return nil, 0, fmt.Errorf("unknown dimension %v", k.dim)
 	}
-	updates := make([]chunk.ScheduledBlockUpdate, 0, len(m.TickList))
-	for _, tick := range m.TickList {
-		t, _ := tick["time"].(int64)
-		bl, _ := tick["blockState"].(map[string]any)
-		bpe := chunk.BlockPaletteEncoding{Blocks: db.conf.Blocks, Upgrader: db.conf.Upgrader}
-		block, err := bpe.DecodeBlockState(bl)
-		if err != nil {
-			db.conf.Log.Error("read scheduled updates: decode block state: " + err.Error())
-			continue
-		}
-		updates = append(updates, chunk.ScheduledBlockUpdate{Pos: blockPosFromNBT(tick), Block: block, Tick: t})
-	}
-	return updates, int64(m.CurrentTick), nil
+	bpe := chunk.BlockPaletteEncoding{Blocks: db.conf.Blocks, Upgrader: db.conf.Upgrader}
+	return chunk.DecodeTicks(data, bpe, [2]int32{k.pos[0], k.pos[1]}, r, db.conf.Log)
 }
 
 // StoreColumn stores a column at a position in a dimension. The column is

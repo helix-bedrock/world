@@ -183,12 +183,12 @@ func (db *DB) loadObjects(s *scratch, dim hx.Dimension, pos hx.ChunkPos, col *ch
 		return err
 	}
 	if v, ok := o.Key(hx.TagPendingTicks); ok {
-		if col.ScheduledBlocks, col.Tick, err = db.decodeTicks(v); err != nil {
+		if col.ScheduledBlocks, col.Tick, err = db.decodeTicks(v, dim, pos); err != nil {
 			return fmt.Errorf("scheduled updates: %w", err)
 		}
 	}
 	if v, ok := o.Key(hx.TagRandomTicks); ok {
-		if col.RandomTicks, col.RandomTick, err = db.decodeTicks(v); err != nil {
+		if col.RandomTicks, col.RandomTick, err = db.decodeTicks(v, dim, pos); err != nil {
 			return fmt.Errorf("random ticks: %w", err)
 		}
 	}
@@ -270,24 +270,14 @@ type ticks struct {
 	TickList    []map[string]any `nbt:"tickList"`
 }
 
-func (db *DB) decodeTicks(data []byte) ([]chunk.ScheduledBlockUpdate, int64, error) {
-	var m ticks
-	if err := nbt.UnmarshalEncoding(data, &m, nbt.LittleEndian); err != nil {
-		return nil, 0, err
+// decodeTicks reads a chunk's tick queue, bounded as chunk.DecodeTicks says.
+func (db *DB) decodeTicks(data []byte, dim hx.Dimension, pos hx.ChunkPos) ([]chunk.ScheduledBlockUpdate, int64, error) {
+	r, ok := dim.Range()
+	if !ok {
+		return nil, 0, fmt.Errorf("unknown dimension %v", dim)
 	}
 	bpe := chunk.BlockPaletteEncoding{Blocks: db.conf.Blocks, Upgrader: db.conf.Upgrader}
-	updates := make([]chunk.ScheduledBlockUpdate, 0, len(m.TickList))
-	for _, tick := range m.TickList {
-		t, _ := tick["time"].(int64)
-		bl, _ := tick["blockState"].(map[string]any)
-		block, err := bpe.DecodeBlockState(bl)
-		if err != nil {
-			db.conf.Log.Error("hxdb: tick queue: decode block state: " + err.Error())
-			continue
-		}
-		updates = append(updates, chunk.ScheduledBlockUpdate{Pos: blockPosFromNBT(tick), Block: block, Tick: t})
-	}
-	return updates, int64(m.CurrentTick), nil
+	return chunk.DecodeTicks(data, bpe, [2]int32{pos[0], pos[1]}, r, db.conf.Log)
 }
 
 func (db *DB) encodeTicks(tick int64, updates []chunk.ScheduledBlockUpdate) ([]byte, error) {
