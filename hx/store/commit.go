@@ -206,8 +206,14 @@ func (s *Store) writeFile(hf *hxFile, b *Batch, ops []op, round uint64) error {
 			}
 			w.recs = append(w.recs, pendingRec{file: hf, key: key, e: e})
 		default:
+			body := b.value(o)
+			sum := crc32.Checksum(body, castagnoli())
+			if hf.unchanged(key, o.kind, body, sum) {
+				continue
+			}
 			var e entry
-			w.run, e = s.appendRecord(w.run, o.kind, key, b.value(o), round)
+			w.run, e = s.appendRecord(w.run, o.kind, key, body, round)
+			e.hasSum, e.sum = true, sum
 			w.recs = append(w.recs, pendingRec{file: hf, key: key, e: e, inRun: true})
 			if len(w.run) >= maxRun {
 				if err := s.flushRun(hf, runFrom); err != nil {
@@ -218,6 +224,17 @@ func (s *Store) writeFile(hf *hxFile, b *Batch, ops []op, round uint64) error {
 		}
 	}
 	return s.flushRun(hf, runFrom)
+}
+
+// unchanged reports whether key already holds body with this kind, as far as
+// the index knows: a record this run wrote with the same length and CRC-32C.
+// A save that writes what is stored then costs no compression and no disk
+// write. Called by the commit goroutine.
+func (hf *hxFile) unchanged(key []byte, kind byte, body []byte, sum uint32) bool {
+	hf.mu.RLock()
+	e, ok := hf.ix.get(key)
+	hf.mu.RUnlock()
+	return ok && e.hasSum && e.sum == sum && e.kind == kind && e.raw == uint64(len(body))
 }
 
 // appendRecord appends a record, padded to recordAlign, and returns its entry

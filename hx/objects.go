@@ -1,9 +1,11 @@
 package hx
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/helix-bedrock/protocol/nbt"
@@ -506,4 +508,82 @@ func (v view) Payload(dim Dimension, pos ChunkPos, n uint32, dst []byte) ([]byte
 	}
 	k := payloadKey(pos, n)
 	return v.get(f, k[:], dst)
+}
+
+// ExpandShellWithout appends the NBT of s, a shell of chunk pos in dim, to
+// dst with the cut fields whose name skip reports left out: a block entity's
+// network form without its Items, say. Only the first bytes of a skipped
+// field's payload are read, for its name. Leaving whole top-level fields out
+// keeps the compound valid.
+func (v view) ExpandShellWithout(dim Dimension, pos ChunkPos, s Shell, dst []byte, skip func(name string) bool) ([]byte, error) {
+	if s.Whole() {
+		return append(dst, s.Data...), nil
+	}
+	f, err := v.w.region(dim, pos)
+	if err != nil {
+		return dst, err
+	}
+	last, removed := 0, 0
+	s.EachCut(func(offset, length int, payload uint32) {
+		if err != nil {
+			return
+		}
+		at := offset - removed
+		dst = append(dst, s.Data[last:at]...)
+		last, removed = at, removed+length
+		k := payloadKey(pos, payload)
+		var name string
+		if name, err = v.fieldName(f, k[:]); err != nil {
+			err = fmt.Errorf("hx: payload %d of chunk %v in %s: %w", payload, pos, dim.Dir(), err)
+			return
+		}
+		if skip(name) {
+			return
+		}
+		start := len(dst)
+		if dst, err = v.appendGet(f, k[:], dst); err != nil {
+			err = fmt.Errorf("hx: payload %d of chunk %v in %s: %w", payload, pos, dim.Dir(), err)
+			return
+		}
+		if len(dst)-start != length {
+			err = fmt.Errorf("hx: payload %d of chunk %v in %s: %d bytes, want %d", payload, pos, dim.Dir(), len(dst)-start, length)
+		}
+	})
+	if err != nil {
+		return dst, err
+	}
+	if last > len(s.Data) {
+		return dst, fmt.Errorf("hx: shell of chunk %v in %s: %w", pos, dim.Dir(), errObjects)
+	}
+	return append(dst, s.Data[last:]...), nil
+}
+
+// fieldName reads the name of the NBT field a payload holds (tag type, LE
+// u16 length, name) from the start of its record, streaming so the rest is
+// not decompressed. A snapshot reads the record whole.
+func (v view) fieldName(f store.FileID, key []byte) (string, error) {
+	var r io.Reader
+	if v.snap != nil {
+		b, err := v.snap.Get(f, key, nil)
+		if err != nil {
+			return "", err
+		}
+		r = bytes.NewReader(b)
+	} else {
+		rc, _, err := v.w.s.GetStream(f, key)
+		if err != nil {
+			return "", err
+		}
+		defer rc.Close()
+		r = rc
+	}
+	var head [3]byte
+	if _, err := io.ReadFull(r, head[:]); err != nil {
+		return "", fmt.Errorf("%w: payload field", errObjects)
+	}
+	name := make([]byte, binary.LittleEndian.Uint16(head[1:]))
+	if _, err := io.ReadFull(r, name); err != nil {
+		return "", fmt.Errorf("%w: payload field name", errObjects)
+	}
+	return string(name), nil
 }

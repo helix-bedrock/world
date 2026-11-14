@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/helix-bedrock/protocol/nbt"
 	"github.com/helix-bedrock/world/chunk"
 	"github.com/helix-bedrock/world/cube"
 	"github.com/helix-bedrock/world/hx/store"
@@ -289,4 +290,45 @@ func payloadRecords(t *testing.T, db *DB) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// TestStagedLoad checks the calls for chunks only shown: terrain with no
+// objects, and block entities without the fields skipped.
+func TestStagedLoad(t *testing.T) {
+	reg := newTestRegistry()
+	db := openTest(t, t.TempDir(), reg)
+	defer db.Close()
+	pos, dim := mcdb.ChunkPos{-1, 4}, mcdb.Overworld
+	chest, sign := cube.Pos{-10, 20, 70}, cube.Pos{-11, 20, 70}
+	col := &chunk.Column{
+		Chunk:    filledChunk(reg),
+		Entities: []chunk.Entity{{ID: 7, Data: map[string]any{"identifier": "minecraft:pig"}}},
+		BlockEntities: []chunk.BlockEntity{{Pos: chest, Data: bigChest(chest, 3)},
+			{Pos: sign, Data: map[string]any{"id": "Sign", "x": int32(-11), "y": int32(20), "z": int32(70), "Text": "hello"}}},
+	}
+	if err := db.StoreColumn(pos, dim, col); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.LoadTerrain(pos, dim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameChunk(t, col.Chunk, got.Chunk)
+	if len(got.Entities) != 0 || len(got.BlockEntities) != 0 {
+		t.Fatal("terrain load read objects")
+	}
+	seen := map[cube.Pos]map[string]any{}
+	if err := db.EachBlockEntityView(pos, dim, func(name string) bool { return name == "Items" }, func(at cube.Pos, raw []byte) error {
+		m, err := nbt.DecodeWithout(raw, nbt.LittleEndian, nil)
+		seen[at] = m
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := seen[chest]["Items"]; ok || seen[chest]["id"] != "Chest" || seen[chest]["x"] != int32(-10) {
+		t.Fatalf("chest seen as %v", seen[chest])
+	}
+	if seen[sign]["Text"] != "hello" {
+		t.Fatalf("sign seen as %v", seen[sign])
+	}
 }

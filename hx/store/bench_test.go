@@ -74,6 +74,8 @@ func BenchmarkCommit(b *testing.B) {
 	for i := range b.N {
 		batch.Reset()
 		for j := range vals {
+			// Change each value, so no write is skipped as unchanged.
+			vals[j][0], vals[j][1] = byte(i), byte(i>>8)
 			batch.Put(id, 1, keys[(i*64+j)%len(keys)], vals[j])
 		}
 		if _, err := s.Commit(&batch); err != nil {

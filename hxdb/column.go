@@ -76,7 +76,42 @@ func (db *DB) LoadColumn(pos mcdb.ChunkPos, dim mcdb.Dimension) (*chunk.Column, 
 	return col, nil
 }
 
+// LoadTerrain reads only the terrain of the column at pos in dim, for a chunk
+// that is shown but not run: blocks, biomes, height map and the small chunk
+// keys, with no entities, tick queues or block entities. Errors match
+// mcdb.ErrNotFound if there is none.
+func (db *DB) LoadTerrain(pos mcdb.ChunkPos, dim mcdb.Dimension) (*chunk.Column, error) {
+	if db.conf.Blocks == nil {
+		return nil, fmt.Errorf("hxdb: load terrain %v: no block registry", pos)
+	}
+	if err := db.settleChunk(chunkID{dim, pos}); err != nil {
+		return nil, err
+	}
+	s := db.getScratch()
+	defer db.putScratch(s)
+	col, err := db.loadTerrain(s, hx.Dimension(dim), hx.ChunkPos(pos))
+	if err != nil {
+		return nil, fmt.Errorf("hxdb: load terrain %v (%v): %w", pos, dim, notFound(err))
+	}
+	return col, nil
+}
+
 func (db *DB) loadColumn(s *scratch, dim hx.Dimension, pos hx.ChunkPos) (*chunk.Column, error) {
+	col, err := db.loadTerrain(s, dim, pos)
+	if err != nil {
+		return nil, err
+	}
+	ver := byte(chunkVersion)
+	if v, ok := s.terrain.Key(tagVersion); ok && len(v) == 1 {
+		ver = v[0]
+	}
+	if err := db.loadObjects(s, dim, pos, col, ver); err != nil {
+		return nil, err
+	}
+	return col, nil
+}
+
+func (db *DB) loadTerrain(s *scratch, dim hx.Dimension, pos hx.ChunkPos) (*chunk.Column, error) {
 	c, rec, err := db.w.LoadChunk(dim, pos, s.rec, &s.terrain)
 	s.rec = rec
 	if err != nil {
@@ -90,14 +125,7 @@ func (db *DB) loadColumn(s *scratch, dim hx.Dimension, pos hx.ChunkPos) (*chunk.
 			col.HeightMap[i] = int16(binary.LittleEndian.Uint16(t.Data3D[2*i:])) //nolint:gosec // raw int16 bits
 		}
 	}
-	ver := byte(chunkVersion)
-	if v, ok := t.Key(tagVersion); ok && len(v) == 1 {
-		ver = v[0]
-	}
 	if err := readTerrainKeys(t, col); err != nil {
-		return nil, err
-	}
-	if err := db.loadObjects(s, dim, pos, col, ver); err != nil {
 		return nil, err
 	}
 	return col, nil

@@ -45,6 +45,8 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   checkpoints to A/B superblocks, generations so freed space is reused only
   when no read can see it, streamed big records, snapshots of one round
   across every file (`snapshot.go`), records copied as stored (`raw.go`),
+  writes of the bytes a key already holds skipped (CRC-32C of the body kept
+  in memory per index entry for records this run wrote; `TestUnchangedSkipped`),
   `ReadOnly` opens. Reads and steady-state
   rounds must stay at 0 allocations (`bench_test.go`). `TestCrash` stops a
   fake disk (`memfs_test.go`) at random moments, losing or tearing unforced
@@ -75,7 +77,11 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   committed every 5 s or at 64 MB; a chunk or player stored again before its
   round is committed commits that round first, level keys are read from the
   round. `KeepBlockEntities` keeps shells and their payloads as stored
-  (`ObjectsWriter.KeepBlockEntity`). `TestColumnRoundTrip`.
+  (`ObjectsWriter.KeepBlockEntity`). Chunks only shown load in a stage of
+  their own: `LoadTerrain` (no objects) and `EachBlockEntityView` (block
+  entities without the fields named, a cut field's payload read only for
+  its name, `hx` `ExpandShellWithout`). `TestColumnRoundTrip`,
+  `TestStagedLoad`.
 - `convert`: BDS world <-> Helix world, lossless (`Import`, `Export`;
   `ExportWorld` exports a world a server has open, from a snapshot). Every
   key goes somewhere; sub chunks that would not re-encode to the same bytes

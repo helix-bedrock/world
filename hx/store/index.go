@@ -17,6 +17,11 @@ type entry struct {
 	keyOff uint32
 	keyLen uint16
 	kind   byte
+	// hasSum says sum is the CRC-32C of the body decompressed. Kept in memory
+	// only, for records this run wrote: a commit skips a write of the same
+	// bytes (Store.writeFile).
+	hasSum bool
+	sum    uint32
 }
 
 func (e entry) extent() extent { return extent{off: e.off, size: alignUp(e.size)} }
@@ -40,7 +45,7 @@ type index struct {
 }
 
 const (
-	entryMem = 40
+	entryMem = 48
 	// compactAt is how much garbage the key arena may hold before it is rebuilt.
 	compactAt = 64 << 10
 )
