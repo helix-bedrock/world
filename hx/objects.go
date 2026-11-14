@@ -431,7 +431,7 @@ func (v view) ExpandShell(dim Dimension, pos ChunkPos, s Shell, dst []byte) ([]b
 // appendGet appends key's body to dst, reading straight into dst's spare
 // capacity when it fits.
 func (v view) appendGet(f store.FileID, key, dst []byte) ([]byte, error) {
-	got, err := v.src.Get(f, key, dst[len(dst):])
+	got, err := v.get(f, key, dst[len(dst):])
 	if err != nil {
 		return dst, err
 	}
@@ -448,5 +448,5 @@ func (v view) Payload(dim Dimension, pos ChunkPos, n uint32, dst []byte) ([]byte
 		return dst[:0], err
 	}
 	k := payloadKey(pos, n)
-	return v.src.Get(f, k[:], dst)
+	return v.get(f, k[:], dst)
 }

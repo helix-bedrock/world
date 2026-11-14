@@ -12,8 +12,10 @@ records, players and level keys. Shells and payloads come next.
 ## Files of a world
 
 ```
-level.dat              BDS's own file, unchanged
-world.hx               key "format": format version (LE u32, 1)
+level.dat              a copy of world.hx's, for BDS tools
+world.hx               key "format": format version (LE u32, 1);
+                       key "level.dat": level.dat as BDS stores it
+bds/                   the BDS world's other files (convert package)
 blocks.hx              the block table
 level.hx               world-wide keys
 players.hx             players
@@ -24,7 +26,8 @@ overworld/r.<x>.<z>.hx regions; also nether/, end/, dim<id>/ for others
 A region holds 32x32 chunks: region X = chunk X >> 5 (rounding down, also
 for negative chunks). A chunk part's key in its region is 3 bytes: the
 chunk's index in the region as a big-endian u16, `(z & 31) * 32 + (x & 31)`,
-then the part: 1 terrain, 2 objects. A chunk exists when it has a terrain
+then the part: 1 terrain, 2 objects (payloads add their number, see below).
+A chunk exists when it has a terrain
 record.
 
 ## Record kinds
@@ -37,6 +40,7 @@ record.
 | 4 | world-wide key (`level.hx`) |
 | 5 | player record (`players.hx`) |
 | 6 | world metadata (`world.hx`) |
+| 7 | payload: a field cut out of a shell |
 
 ## Block table (`blocks.hx`)
 
@@ -74,14 +78,28 @@ chunks with no layers are not written.
 
 ## Objects record
 
-A format version byte (1), then sections as in the terrain record:
+A format version byte (1), the number of payload records the chunk has
+(varint), then sections as in the terrain record:
 
 | Tag | Section | Body |
 | --- | --- | --- |
-| 1 | chunk key | a BDS chunk key that belongs to the chunk's objects: `1` block entities, `2` entities (old worlds), `3` pending ticks, `;` random ticks; tag byte then value as BDS stores it |
-| 2 | entity | the 8-byte actor ID as in BDS's `actorprefix` key, then the entity's NBT as stored; in the order of BDS's `digp` list |
+| 1 | chunk key | a BDS chunk key that belongs with the objects: `2` entities (old worlds), `3` pending ticks, `:` random ticks; tag byte then value as BDS stores it |
+| 2 | entity | the 8-byte actor ID as in BDS's `actorprefix` key, then the entity's shell; in the order of BDS's `digp` list. An empty shell is an ID in `digp` with no `actorprefix` record |
+| 3 | block entity | a shell, in the order of BDS's `1` value (compounds back to back) |
+| 4 | digp | empty: the chunk has a `digp` key, also with no entities |
 
 Every other BDS chunk key goes in the terrain record.
+
+**Shell**: cut count (varint); per cut, in order: where the field starts in
+the whole NBT (varint), its length (varint), its payload number (varint);
+then the NBT with the cut fields left out. A field is cut when the compound
+is over 4 KB: fields of 512 bytes or more, largest first, until at most 4 KB
+is left. A cut is a whole top-level field, type byte and name included, so
+putting each payload back at its offset gives BDS's bytes unchanged.
+
+**Payload record** (kind 7): key = the chunk's 2-byte index in the region,
+part 3, payload number (big-endian u32); body = the cut field's bytes.
+Payloads are numbered from 0 per chunk; a save with fewer deletes the rest.
 
 ## Level keys and players
 
@@ -171,3 +189,10 @@ A checkpoint writes the index record and forces it, then writes the
 superblock slot not in use and forces it. The journal is emptied (a new
 segment, older ones removed) only once every file changed since is
 checkpointed.
+
+## Snapshots
+
+A snapshot (`Store.Snapshot`) is the store as of one round, kept in memory
+only: it pins that round's generation, so no record it can see is reused,
+and each later round notes, before changing a key, what the key held. A
+snapshot read looks at those notes, then at the current index.

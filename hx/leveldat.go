@@ -19,7 +19,7 @@ import (
 
 // LevelDatBytes reads level.dat as stored, header included, into dst[:0].
 func (v view) LevelDatBytes(dst []byte) ([]byte, error) {
-	b, err := v.src.Get(v.w.meta, metaLevelDatKey, dst)
+	b, err := v.get(v.w.meta, metaLevelDatKey, dst)
 	if !errors.Is(err, store.ErrNotFound) {
 		return b, err
 	}
@@ -113,7 +113,7 @@ func (w *World) Snapshot() (*Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("hx: snapshot: %w", err)
 	}
-	return &Snapshot{view: view{w: w, src: sn}, sn: sn}, nil
+	return &Snapshot{view: view{w: w, snap: sn}, sn: sn}, nil
 }
 
 // Round is the save round the snapshot shows.

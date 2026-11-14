@@ -41,7 +41,8 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   checksummed records never written over, a flat in-memory index per file
   within a byte budget, save rounds made atomic across files by one journal,
   checkpoints to A/B superblocks, generations so freed space is reused only
-  when no read can see it, streamed big records. Reads and steady-state
+  when no read can see it, streamed big records, snapshots of one round
+  across every file (`snapshot.go`). Reads and steady-state
   rounds must stay at 0 allocations (`bench_test.go`). `TestCrash` stops a
   fake disk (`memfs_test.go`) at random moments, losing or tearing unforced
   writes; any change to write order must keep it passing.
@@ -51,10 +52,19 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   packed words as BDS stores them, palettes of block table IDs, the small
   BDS chunk keys kept byte for byte), the objects record (`objects.go`:
   block entities, ticks and entities as BDS stores them), and the world
-  provider (`world.go`: regions of 32x32 chunks, reads; `round.go`: save
-  rounds, atomic across files; `players.go`: BDS's player keys). Decoding a
-  terrain record and a warm terrain read must stay at 0 allocations
-  (`BenchmarkDecodeTerrain`, `BenchmarkLoadTerrain`).
+  provider (`world.go`: regions of 32x32 chunks, reads shared by World and
+  Snapshot through `view`; `round.go`: save rounds, atomic across files;
+  `players.go`: BDS's player keys; `leveldat.go`: level.dat in world.hx).
+  Block entities and entities are shells with fields over 512 bytes cut
+  into payload records (`objects.go`) until 4 KB is left; splicing them
+  back must give BDS's bytes. Decoding a terrain record and a warm terrain
+  read must stay at 0 allocations (`BenchmarkDecodeTerrain`,
+  `BenchmarkLoadTerrain`).
+- `convert`: BDS world <-> Helix world, lossless (`Import`, `Export`). Every
+  key goes somewhere; sub chunks that would not re-encode to the same bytes
+  stay raw. `TestRoundTrip` covers every key family; `TestBDSWorld`
+  (`HX_BDS_WORLD` = a BDS world folder) round-trips a real world and
+  compares every key.
 - `chunk`: chunks, sub chunks, palettes and paletted storage; disk and network
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.

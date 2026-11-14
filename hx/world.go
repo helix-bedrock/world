@@ -85,6 +85,27 @@ func (d Dimension) Dir() string {
 	return "dim" + strconv.Itoa(int(d))
 }
 
+// ParseDimensionDir returns the dimension whose region folder is name.
+func ParseDimensionDir(name string) (Dimension, bool) {
+	switch name {
+	case "overworld":
+		return Overworld, true
+	case "nether":
+		return Nether, true
+	case "end":
+		return End, true
+	}
+	rest, ok := strings.CutPrefix(name, "dim")
+	if !ok {
+		return 0, false
+	}
+	d, err := strconv.ParseInt(rest, 10, 32)
+	if err != nil || d <= int64(End) || strconv.Itoa(int(d)) != rest {
+		return 0, false
+	}
+	return Dimension(d), true
+}
+
 // ChunkPos is a chunk's position in chunks: X, Z.
 type ChunkPos [2]int32
 
@@ -117,16 +138,26 @@ type Config struct {
 	Store store.Options
 }
 
-// source is what reads go to: the store, or a snapshot of it.
-type source interface {
-	Get(id store.FileID, key, dst []byte) ([]byte, error)
-	Range(id store.FileID, fn func(key []byte, info store.Info) bool) error
+// view holds the read methods World and Snapshot share. Reads go to the
+// snapshot if set, else to the store. Not an interface: a key passed through
+// an interface call escapes, and reads must not allocate.
+type view struct {
+	w    *World
+	snap *store.Snapshot
 }
 
-// view holds the read methods World and Snapshot share.
-type view struct {
-	w   *World
-	src source
+func (v view) get(id store.FileID, key, dst []byte) ([]byte, error) {
+	if v.snap != nil {
+		return v.snap.Get(id, key, dst)
+	}
+	return v.w.s.Get(id, key, dst)
+}
+
+func (v view) rangeKeys(id store.FileID, fn func(key []byte, info store.Info) bool) error {
+	if v.snap != nil {
+		return v.snap.Range(id, fn)
+	}
+	return v.w.s.Range(id, fn)
 }
 
 // World is a Helix world on disk. Reads may run from any goroutine at any
@@ -157,7 +188,7 @@ func Open(dir string, conf Config) (*World, error) {
 		return nil, fmt.Errorf("hx: open world: %w", err)
 	}
 	w := &World{dir: dir, conf: conf, s: s, regions: map[regionKey]store.FileID{}}
-	w.view = view{w: w, src: s}
+	w.view = view{w: w}
 	if err := w.openFiles(); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -270,7 +301,7 @@ func (v view) part(dim Dimension, pos ChunkPos, part byte, dst []byte) ([]byte, 
 		return dst[:0], err
 	}
 	k := chunkKey(pos, part)
-	return v.src.Get(f, k[:], dst)
+	return v.get(f, k[:], dst)
 }
 
 // LoadChunk reads and decodes a chunk's terrain, using buf and t as scratch
@@ -299,13 +330,13 @@ func (v view) LoadChunk(dim Dimension, pos ChunkPos, buf []byte, t *Terrain) (*c
 
 // Level reads a world-wide key into dst[:0], or returns ErrNotFound.
 func (v view) Level(key string, dst []byte) ([]byte, error) {
-	return v.src.Get(v.w.level, []byte(key), dst)
+	return v.get(v.w.level, []byte(key), dst)
 }
 
 // EachLevel calls fn for every world-wide key, in key order, until fn returns
 // false. The key is valid only during the call.
 func (v view) EachLevel(fn func(key []byte) bool) error {
-	return v.src.Range(v.w.level, func(key []byte, _ store.Info) bool { return fn(key) })
+	return v.rangeKeys(v.w.level, func(key []byte, _ store.Info) bool { return fn(key) })
 }
 
 // EachChunk calls fn for every chunk of dim with a terrain record, region by
@@ -337,7 +368,7 @@ func (v view) eachRegionChunk(dim Dimension, rx, rz int32, fn func(ChunkPos) boo
 		return false, err
 	}
 	more := true
-	err = v.src.Range(f, func(key []byte, _ store.Info) bool {
+	err = v.rangeKeys(f, func(key []byte, _ store.Info) bool {
 		if len(key) != 3 || key[2] != partTerrain {
 			return true
 		}

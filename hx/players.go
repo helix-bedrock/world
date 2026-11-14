@@ -41,7 +41,7 @@ func (v view) LoadPlayer(ids PlayerIDs) (map[string]any, bool, error) {
 	if !ok || err != nil {
 		return nil, ok, err
 	}
-	b, err := v.src.Get(v.w.players, []byte(look.ServerID), nil)
+	b, err := v.get(v.w.players, []byte(look.ServerID), nil)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, false, nil
 	}
@@ -115,7 +115,7 @@ func (v view) playerLookup(ids PlayerIDs) (playerLookup, bool, error) {
 		if id == "" {
 			continue
 		}
-		b, err := v.src.Get(v.w.players, []byte(playerLookupPrefix+id), nil)
+		b, err := v.get(v.w.players, []byte(playerLookupPrefix+id), nil)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
@@ -137,13 +137,13 @@ func (v view) playerLookup(ids PlayerIDs) (playerLookup, bool, error) {
 // PlayerRecord reads a players.hx record by its BDS key into dst[:0], or
 // returns ErrNotFound. For the converter and tools.
 func (v view) PlayerRecord(key string, dst []byte) ([]byte, error) {
-	return v.src.Get(v.w.players, []byte(key), dst)
+	return v.get(v.w.players, []byte(key), dst)
 }
 
 // EachPlayerRecord calls fn for every players.hx key, in key order, until fn
 // returns false. The key is valid only during the call.
 func (v view) EachPlayerRecord(fn func(key []byte) bool) error {
-	return v.src.Range(v.w.players, func(key []byte, _ store.Info) bool { return fn(key) })
+	return v.rangeKeys(v.w.players, func(key []byte, _ store.Info) bool { return fn(key) })
 }
 
 // PutPlayerRecord sets a players.hx record by its BDS key, as BDS stores it.
