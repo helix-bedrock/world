@@ -1,11 +1,9 @@
 package lsm
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"hash"
 	"hash/crc32"
 	"io"
 	"sync"
@@ -155,6 +153,17 @@ func (t *table) get(ikey []byte) (key, value []byte, found bool, err error) {
 	if t.hasFilter && !t.filter.mayContain(h.offset, ukey) {
 		return nil, nil, false, nil
 	}
+	if h.size >= t.bigBlock {
+		// Streamed: only the entries up to ikey's are inflated, and only its value kept.
+		b, found, err := t.seekBig(h, ikey)
+		if !found || err != nil {
+			return nil, nil, false, err
+		}
+		defer b.Close()
+		key = append([]byte(nil), b.key...)
+		value, err = b.value(nil)
+		return key, value, err == nil, err
+	}
 	b, err := t.readBlock(h)
 	if err != nil {
 		return nil, nil, false, err
@@ -169,9 +178,9 @@ func (t *table) get(ikey []byte) (key, value []byte, found bool, err error) {
 	return it.key, it.value, true, nil
 }
 
-// getStream is get for a value that may be big: a value in a block over bigBlock is
-// returned as a stream inflating the block as it is read, never held whole. small is set
-// instead when the block is small.
+// getStream is get for a value that may be big: a value of bigBlock bytes or more is
+// returned as a stream inflating its block as it is read, never held whole. small is set
+// instead for a smaller value.
 func (t *table) getStream(ikey []byte) (key []byte, small []byte, stream *valueStream, found bool, err error) {
 	h, ok, err := t.find(ikey)
 	if !ok || err != nil {
@@ -185,146 +194,32 @@ func (t *table) getStream(ikey []byte) (key []byte, small []byte, stream *valueS
 		key, value, found, err := t.get(ikey)
 		return key, value, nil, found, err
 	}
-	s, err := t.openStream(h)
-	if err != nil {
+	b, found, err := t.seekBig(h, ikey)
+	if !found || err != nil {
 		return nil, nil, nil, false, err
 	}
-	if !bytes.Equal(userKey(s.key), ukey) || compareInternal(s.key, ikey) < 0 {
-		// A big block holds one entry; if it is not this key, the key is not here.
-		_ = s.Close()
-		return nil, nil, nil, false, nil
+	key = append([]byte(nil), b.key...)
+	if b.vlen < int64(t.bigBlock) { //nolint:gosec // small
+		small, err = b.value(nil)
+		b.Close()
+		return key, small, nil, err == nil, err
 	}
-	return s.key, nil, s, true, nil
+	return key, nil, &valueStream{b: b, size: b.vlen}, true, nil
 }
 
-// valueStream reads the value of the one entry of a big block, inflating as it goes and
-// checking the block's checksum when the value has been read to its end.
-type valueStream struct {
-	t       *table
-	in      *inflater
-	crc     hash.Hash32
-	typ     byte
-	h       blockHandle
-	raw     *bufio.Reader
-	r       io.Reader // the decompressed block, positioned at the value
-	key     []byte
-	size    int64
-	left    int64
-	done    bool
-	wantCRC uint32
-}
-
-// openStream reads the entry header of a big block and returns a stream of its value.
-func (t *table) openStream(h blockHandle) (*valueStream, error) {
-	if h.offset > t.size || h.size > t.size-h.offset || t.size-h.offset-h.size < blockTrailerLen {
-		return nil, errCorrupt(fmt.Sprintf("table %d: block handle out of range", t.num))
-	}
-	var trailer [blockTrailerLen]byte
-	if _, err := t.f.ReadAt(trailer[:], int64(h.offset+h.size)); err != nil { //nolint:gosec // in range
-		return nil, fmt.Errorf("lsm: read table %d: %w", t.num, err)
-	}
-	s := &valueStream{t: t, in: t.getInflater(), crc: crc32.New(castagnoli()), typ: trailer[0], h: h}
-	sec := io.NewSectionReader(t.f, int64(h.offset), int64(h.size)) //nolint:gosec // in range
-	s.raw = bufio.NewReaderSize(io.TeeReader(sec, s.crc), 64<<10)
-	r, err := s.in.reader(s.raw, s.typ)
+// seekBig opens a big block at the first entry whose user key is ikey's, at or after
+// ikey. When found is false the block is closed.
+func (t *table) seekBig(h blockHandle, ikey []byte) (b *bigReader, found bool, err error) {
+	b, ok, err := t.openBig(h)
 	if err != nil {
-		s.release()
-		return nil, err
+		return nil, false, err
 	}
-	s.r = r
-	if err := s.readHeader(); err != nil {
-		s.release()
-		return nil, err
+	for ok && compareInternal(b.key, ikey) < 0 {
+		ok, err = b.next()
 	}
-	s.wantCRC = unmaskCRC(binary.LittleEndian.Uint32(trailer[1:]))
-	return s, nil
-}
-
-// readHeader reads the entry's lengths and key.
-func (s *valueStream) readHeader() error {
-	br := byteReader{r: s.r}
-	shared, err := binary.ReadUvarint(&br)
-	if err != nil || shared != 0 {
-		return errCorrupt("big block entry")
+	if err != nil || !ok || !bytes.Equal(userKey(b.key), userKey(ikey)) {
+		b.Close()
+		return nil, false, err
 	}
-	klen, err := binary.ReadUvarint(&br)
-	if err != nil || klen > 1<<20 {
-		return errCorrupt("big block entry")
-	}
-	vlen, err := binary.ReadUvarint(&br)
-	if err != nil || vlen > 1<<62 {
-		return errCorrupt("big block entry")
-	}
-	s.key = make([]byte, klen)
-	if _, err := io.ReadFull(s.r, s.key); err != nil {
-		return errCorrupt("big block key")
-	}
-	s.size, s.left = int64(vlen), int64(vlen) //nolint:gosec // checked above
-	return nil
-}
-
-// byteReader reads single bytes from a reader for varints.
-type byteReader struct {
-	r   io.Reader
-	one [1]byte
-}
-
-func (b *byteReader) ReadByte() (byte, error) {
-	_, err := io.ReadFull(b.r, b.one[:])
-	return b.one[0], err
-}
-
-// Size is the value's length.
-func (s *valueStream) Size() int64 { return s.size }
-
-// Read reads the value.
-func (s *valueStream) Read(p []byte) (int, error) {
-	if s.left == 0 {
-		if err := s.finish(); err != nil {
-			return 0, err
-		}
-		return 0, io.EOF
-	}
-	if int64(len(p)) > s.left {
-		p = p[:s.left]
-	}
-	n, err := s.r.Read(p)
-	s.left -= int64(n)
-	if err == io.EOF {
-		if s.left > 0 {
-			return n, errCorrupt("big block cut short")
-		}
-		err = nil
-	}
-	return n, err
-}
-
-// finish checks the block's checksum once its value has been read: what is left of the
-// block (its restart points) is read through so every stored byte is checksummed.
-func (s *valueStream) finish() error {
-	if s.done {
-		return nil
-	}
-	s.done = true
-	if _, err := io.Copy(io.Discard, s.raw); err != nil {
-		return fmt.Errorf("lsm: read table %d: %w", s.t.num, err)
-	}
-	c := crc32.Update(s.crc.Sum32(), castagnoli(), []byte{s.typ})
-	if c != s.wantCRC {
-		return errCorrupt(fmt.Sprintf("table %d: big block checksum", s.t.num))
-	}
-	return nil
-}
-
-// Close releases the stream.
-func (s *valueStream) Close() error {
-	s.release()
-	return nil
-}
-
-func (s *valueStream) release() {
-	if s.in != nil {
-		s.t.inflaters.Put(s.in)
-		s.in = nil
-	}
+	return b, true, nil
 }

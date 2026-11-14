@@ -27,10 +27,12 @@ type tableIter struct {
 	err   error
 	valid bool
 
-	// big is set while on a big block: bigKey is its one key, bigValue its value once read.
+	// big is set while on a big block, streamed by br entry by entry (bigblock.go):
+	// bigValue holds the current entry's value once read (bigLoad).
 	big      bool
 	bigH     blockHandle
-	bigKey   []byte
+	br       *bigReader
+	bigOK    bool
 	bigValue []byte
 	bigLoad  bool
 }
@@ -46,6 +48,7 @@ func (it *tableIter) loadBlock() bool {
 		it.err = err
 		return false
 	}
+	it.closeBig()
 	it.big = h.size >= it.t.bigBlock
 	if it.big {
 		return it.loadBig(h)
@@ -59,24 +62,34 @@ func (it *tableIter) loadBlock() bool {
 	return true
 }
 
-// loadBig reads only the key of a big block.
+// loadBig opens a big block at its first entry.
 func (it *tableIter) loadBig(h blockHandle) bool {
-	s, err := it.t.openStream(h)
+	br, ok, err := it.t.openBig(h)
 	if err != nil {
 		it.err = err
 		return false
 	}
-	it.bigH, it.bigKey, it.bigValue, it.bigLoad = h, append(it.bigKey[:0], s.key...), nil, false
-	_ = s.Close()
-	// The data iterator stands for the one entry: an empty block makes first and seek
-	// fall through to the checks in bigFirst and bigSeek.
+	it.bigH, it.br, it.bigOK, it.bigLoad = h, br, ok, false
+	// The data iterator is unused: an empty block keeps it from reporting entries.
 	it.data.reset(block{})
 	return true
 }
 
+// closeBig releases the big block reader, if any, and a value buffer grown for a big
+// value.
+func (it *tableIter) closeBig() {
+	if it.br != nil {
+		it.br.Close()
+		it.br = nil
+	}
+	if cap(it.bigValue) > int(it.t.bigBlock) { //nolint:gosec // small
+		it.bigValue = nil
+	}
+}
+
 // bigSource reports the big block the iterator is on, for compaction to copy.
 func (it *tableIter) bigSource() (*table, blockHandle, bool) {
-	if !it.valid || !it.big {
+	if !it.valid || !it.big || it.br == nil || !it.br.single() {
 		return nil, blockHandle{}, false
 	}
 	return it.t, it.bigH, true
@@ -85,7 +98,7 @@ func (it *tableIter) bigSource() (*table, blockHandle, bool) {
 // blockFirst moves to the first entry of the current block.
 func (it *tableIter) blockFirst() bool {
 	if it.big {
-		return true
+		return it.bigOK
 	}
 	return it.data.first()
 }
@@ -93,7 +106,10 @@ func (it *tableIter) blockFirst() bool {
 // blockSeek moves to the first entry of the current block at or after ikey.
 func (it *tableIter) blockSeek(ikey []byte) bool {
 	if it.big {
-		return compareInternal(it.bigKey, ikey) >= 0
+		for it.bigOK && compareInternal(it.br.key, ikey) < 0 {
+			it.bigNext()
+		}
+		return it.bigOK
 	}
 	return it.data.seek(ikey)
 }
@@ -101,9 +117,25 @@ func (it *tableIter) blockSeek(ikey []byte) bool {
 // blockNext moves to the next entry of the current block.
 func (it *tableIter) blockNext() bool {
 	if it.big {
-		return false
+		return it.bigNext()
 	}
 	return it.data.next()
+}
+
+// bigNext moves to the next entry of a big block. After a value alone in its block,
+// the block is left without inflating the value.
+func (it *tableIter) bigNext() bool {
+	it.bigLoad = false
+	if it.br.single() {
+		it.bigOK = false
+		return false
+	}
+	ok, err := it.br.next()
+	if err != nil {
+		it.err = err
+	}
+	it.bigOK = ok
+	return ok
 }
 
 // skipEmpty moves to the next block while the current one is exhausted.
@@ -158,7 +190,7 @@ func (it *tableIter) Next() bool {
 
 func (it *tableIter) Key() []byte {
 	if it.big {
-		return it.bigKey
+		return it.br.key
 	}
 	return it.data.key
 }
@@ -170,27 +202,20 @@ func (it *tableIter) Value() []byte {
 	}
 	if !it.bigLoad {
 		it.bigLoad = true
-		raw, err := it.t.readBlockUncached(it.bigH)
-		if err == nil {
-			var b block
-			if b, err = parseBlock(raw); err == nil {
-				bi := newBlockIter(b, compareInternal)
-				if bi.first() {
-					it.bigValue = bi.value
-				} else {
-					err = bi.err
-				}
-			}
-		}
+		v, err := it.br.value(it.bigValue)
 		if err != nil {
 			it.err = err
 		}
+		it.bigValue = v
 	}
 	return it.bigValue
 }
 
-func (it *tableIter) Err() error   { return it.err }
-func (it *tableIter) Close() error { return nil }
+func (it *tableIter) Err() error { return it.err }
+func (it *tableIter) Close() error {
+	it.closeBig()
+	return nil
+}
 
 // bigSourcer is an iterator that may stand on a big block compaction can copy as stored.
 type bigSourcer interface {
@@ -247,6 +272,9 @@ func (it *levelIter) open(i int) bool {
 }
 
 func (it *levelIter) closeCur() {
+	if it.cur != nil {
+		_ = it.cur.Close()
+	}
 	if it.ent != nil {
 		it.tc.release(it.ent)
 		it.ent, it.cur = nil, nil
