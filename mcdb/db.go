@@ -151,7 +151,14 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read chunk keys: %w", err)
 	}
-	defer rd.release()
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			rd.release()
+		}
+	}
+	defer release()
 	ver, err := db.version(rd, k)
 	if err != nil {
 		return nil, fmt.Errorf("read version: %w", err)
@@ -190,11 +197,6 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	if col.Extra, err = db.extraTags(rd, k); err != nil {
 		return nil, fmt.Errorf("read chunk keys: %w", err)
 	}
-	col.Entities, err = db.entities(rd, k, ver)
-	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
-		// Not all chunks need to have entities, so an ErrNotFound is fine here.
-		return nil, fmt.Errorf("read entities: %w", err)
-	}
 	col.BlockEntities, err = db.blockEntities(k)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		// Same as with entities, an ErrNotFound is fine here.
@@ -207,6 +209,17 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	col.RandomTicks, col.RandomTick, err = db.scheduledUpdates(rd, k, keyRandomTicks)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		return nil, fmt.Errorf("read random ticks: %w", err)
+	}
+	// Entity records are read one by one through the write buffer, which needs no flush
+	// held off, so flushes may run meanwhile: a chunk of hundreds of big records (items
+	// holding shulker boxes of books) takes seconds to read, and a flush waiting that long
+	// would hold off every other chunk load behind it. A record a flush deletes meanwhile
+	// is skipped as missing; the chunk's other keys are already read.
+	release()
+	col.Entities, err = db.entities(rd, k, ver)
+	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
+		// Not all chunks need to have entities, so an ErrNotFound is fine here.
+		return nil, fmt.Errorf("read entities: %w", err)
 	}
 	return col, nil
 }

@@ -578,8 +578,11 @@ type inflater struct {
 }
 
 // inflateGuessUpTo is the biggest compressed block inflate guesses the size of; a bigger
-// one is counted first.
-const inflateGuessUpTo = 256 << 10
+// one is counted first. Counting inflates the block twice, so it is kept for blocks of
+// hundreds of megabytes, where a guess grown by doubling would waste as much again: a world
+// of items holding shulker boxes of books has thousands of blocks of about a megabyte, and
+// inflating each twice kept every core busy loading chunks.
+const inflateGuessUpTo = 4 << 20
 
 // inflate decompresses one block of the given type into a buffer from the
 // pool. The decompressed size is not stored, so the buffer grows as needed.

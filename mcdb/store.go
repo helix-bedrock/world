@@ -129,38 +129,46 @@ func (l levelDB) GetStream(key []byte) (io.ReadCloser, int64, error) {
 	return l.db.GetStream(key, nil)
 }
 
+// Write applies writes: streamed values first, in a transaction of their own, then the rest
+// as one batch. Only the streamed values go through the transaction: it writes everything it
+// holds straight into level-0 tables, and a whole flush there (chunks, entity lists, entity
+// records) made small level-0 tables each spanning nearly every key, hundreds of them, which
+// every read then had to look in. A failure between the two leaves the flush pending, and
+// the next one writes both again.
 func (l levelDB) Write(writes []KVWrite) error {
 	if slices.ContainsFunc(writes, func(w KVWrite) bool { return w.Stream != nil }) {
-		return l.writeStreams(writes)
+		if err := l.writeStreams(writes); err != nil {
+			return err
+		}
 	}
 	batch := leveldb.MakeBatch(len(writes))
 	for _, w := range writes {
-		if w.Delete {
+		switch {
+		case w.Stream != nil:
+		case w.Delete:
 			batch.Delete(w.Key)
-		} else {
+		default:
 			batch.Put(w.Key, w.Value)
 		}
+	}
+	if batch.Len() == 0 {
+		return nil
 	}
 	return l.db.Write(batch, nil)
 }
 
-// writeStreams applies writes with streamed values in one transaction: each streamed value
-// goes into a table of its own as it is read, and the transaction commits them all at once.
+// writeStreams writes the streamed values of writes in one transaction: each goes into a
+// table of its own as it is read, and the transaction commits them all at once.
 func (l levelDB) writeStreams(writes []KVWrite) error {
 	tr, err := l.db.OpenTransaction()
 	if err != nil {
 		return err
 	}
 	for _, w := range writes {
-		switch {
-		case w.Delete:
-			err = tr.Delete(w.Key, nil)
-		case w.Stream != nil:
-			err = putStream(tr, w)
-		default:
-			err = tr.Put(w.Key, w.Value, nil)
+		if w.Stream == nil {
+			continue
 		}
-		if err != nil {
+		if err = putStream(tr, w); err != nil {
 			tr.Discard()
 			return fmt.Errorf("write %q: %w", w.Key, err)
 		}
