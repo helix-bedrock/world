@@ -77,12 +77,17 @@ type tableSnap struct {
 
 // NewBlockTable returns an empty table resolving states against reg. up
 // upgrades states saved by older versions; with nil, only current states
-// resolve.
+// resolve. With a nil reg the table only keeps bytes, as a converter needs:
+// no entry resolves and ID fails.
 func NewBlockTable(reg chunk.BlockRegistry, up *chunk.Upgrader) *BlockTable {
+	n := 0
+	if reg != nil {
+		n = reg.BlockCount()
+	}
 	t := &BlockTable{
 		reg:     reg,
 		enc:     chunk.BlockPaletteEncoding{Blocks: reg, Upgrader: up},
-		byRID:   make([]atomic.Uint32, reg.BlockCount()),
+		byRID:   make([]atomic.Uint32, n),
 		byBytes: map[string]uint32{},
 	}
 	for i := range t.byRID {
@@ -182,6 +187,9 @@ func (t *BlockTable) addLocked(state []byte) (uint32, error) {
 
 // resolve finds the runtime ID of a stored state, upgrading it if it is old.
 func (t *BlockTable) resolve(state []byte) (rid uint32, flags uint8) {
+	if t.reg == nil {
+		return 0, 0
+	}
 	var m map[string]any
 	if err := nbt.UnmarshalEncoding(state, &m, nbt.LittleEndian); err != nil {
 		return 0, 0

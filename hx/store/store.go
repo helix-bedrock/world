@@ -75,6 +75,8 @@ type Store struct {
 	oldest   *generation
 	failed   error
 	w        writer
+	// snaps are the open snapshots.
+	snaps []*Snapshot
 }
 
 // Open opens the store in dir, creating it if needed, and replays its journal.

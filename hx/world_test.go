@@ -3,11 +3,15 @@ package hx
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
 
+	"github.com/helix-bedrock/protocol/nbt"
 	"github.com/helix-bedrock/world/hx/store"
+	"github.com/helix-bedrock/world/mcdb/leveldat"
 )
 
 func openTestWorld(t testing.TB, dir string) *World {
@@ -19,13 +23,74 @@ func openTestWorld(t testing.TB, dir string) *World {
 	return w
 }
 
-func testObjects() *Objects {
-	return &Objects{
-		Keys: []ChunkKey{{Tag: TagBlockEntities, Value: []byte("chest nbt")}, {Tag: TagPendingTicks, Value: []byte{1, 2}}},
-		Entities: []Entity{
-			{ID: []byte{0, 0, 0, 1, 0, 0, 0, 7}, Data: []byte("cow")},
-			{ID: []byte{0, 0, 0, 1, 0, 0, 0, 9}, Data: []byte("pig")},
+// bigChest is a block entity whose Items field is far over the shell limit.
+func bigChest(t testing.TB, fill byte) []byte {
+	t.Helper()
+	items := make([]any, 40)
+	for i := range items {
+		items[i] = map[string]any{"Name": "minecraft:written_book", "Pages": string(bytes.Repeat([]byte{fill}, 500))}
+	}
+	b, err := nbt.MarshalEncoding(map[string]any{"id": "Chest", "x": int32(1), "y": int32(2), "z": int32(3), "Items": items, "CustomName": string(bytes.Repeat([]byte{'n'}, 600))}, nbt.LittleEndian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func smallCompound(t testing.TB, id string) []byte {
+	t.Helper()
+	b, err := nbt.MarshalEncoding(map[string]any{"id": id}, nbt.LittleEndian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func testObjects(t testing.TB) *ObjectsSource {
+	return &ObjectsSource{
+		Keys:          []ChunkKey{{Tag: TagPendingTicks, Value: []byte{1, 2}}},
+		BlockEntities: append(smallCompound(t, "Sign"), bigChest(t, 'a')...),
+		Entities: []EntityData{
+			{ID: []byte{0, 0, 0, 1, 0, 0, 0, 7}, Data: smallCompound(t, "minecraft:cow")},
+			{ID: []byte{0, 0, 0, 1, 0, 0, 0, 9}},
 		},
+	}
+}
+
+// sameObjects checks a stored objects record expands to src.
+func sameObjects(t *testing.T, v view, dim Dimension, pos ChunkPos, src *ObjectsSource) {
+	t.Helper()
+	rec, err := v.ObjectsRecord(dim, pos, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var o Objects
+	if err := DecodeObjects(rec, &o); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(o.Keys, src.Keys) || o.Digp != (src.Digp || len(src.Entities) > 0) {
+		t.Fatalf("keys %v digp %v", o.Keys, o.Digp)
+	}
+	var bes []byte
+	for _, s := range o.BlockEntities {
+		if bes, err = v.ExpandShell(dim, pos, s, bes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Equal(bes, src.BlockEntities) {
+		t.Fatal("block entities differ")
+	}
+	if len(o.Entities) != len(src.Entities) {
+		t.Fatalf("%d entities", len(o.Entities))
+	}
+	for i, e := range o.Entities {
+		data, err := v.ExpandShell(dim, pos, e.Shell, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(e.ID, src.Entities[i].ID) || !bytes.Equal(data, src.Entities[i].Data) {
+			t.Fatalf("entity %d differs", i)
+		}
 	}
 }
 
@@ -42,7 +107,7 @@ func TestWorld(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := r.PutObjects(Overworld, ChunkPos{-1, -33}, testObjects()); err != nil {
+	if err := r.PutObjects(Overworld, ChunkPos{-1, -33}, testObjects(t)); err != nil {
 		t.Fatal(err)
 	}
 	r.PutLevel("scoreboard", []byte("board"))
@@ -81,16 +146,14 @@ func TestWorld(t *testing.T) {
 		t.Fatalf("missing nether chunk: %v", err)
 	}
 
-	rec, err := w.ObjectsRecord(Overworld, ChunkPos{-1, -33}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sameObjects(t, w.view, Overworld, ChunkPos{-1, -33}, testObjects(t))
+	rec, _ := w.ObjectsRecord(Overworld, ChunkPos{-1, -33}, nil)
 	var o Objects
-	if err := DecodeObjects(rec, &o); err != nil {
-		t.Fatal(err)
+	if err := DecodeObjects(rec, &o); err != nil || o.Payloads == 0 || o.BlockEntities[0].Cuts() != 0 || o.BlockEntities[1].Cuts() == 0 {
+		t.Fatalf("big chest not cut: %d payloads, %v", o.Payloads, err)
 	}
-	if want := testObjects(); !reflect.DeepEqual(o.Keys, want.Keys) || !reflect.DeepEqual(o.Entities, want.Entities) {
-		t.Fatalf("objects %+v", o)
+	if len(rec) > 2*shellLimit {
+		t.Fatalf("objects record of %d bytes", len(rec))
 	}
 
 	if v, err := w.Level("scoreboard", nil); err != nil || string(v) != "board" {
@@ -128,24 +191,94 @@ func TestWorld(t *testing.T) {
 	}
 }
 
-func TestObjectsRoundTrip(t *testing.T) {
-	rec, err := AppendObjects(nil, testObjects())
+// TestObjectsResave checks a smaller re-save drops old payloads, and that a
+// snapshot taken before still reads the old objects.
+func TestObjectsResave(t *testing.T) {
+	w := openTestWorld(t, t.TempDir())
+	defer w.Close()
+	pos := ChunkPos{2, 2}
+	src := testObjects(t)
+	src.BlockEntities = append(append([]byte(nil), src.BlockEntities...), bigChest(t, 'b')...)
+	r := w.NewRound()
+	if err := r.PutObjects(Overworld, pos, src); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Commit(r); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := w.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer snap.Release()
+
+	small := testObjects(t)
+	if err := r.PutObjects(Overworld, pos, small); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Commit(r); err != nil {
+		t.Fatal(err)
+	}
+	sameObjects(t, w.view, Overworld, pos, small)
+	sameObjects(t, snap.view, Overworld, pos, src)
+	rec, _ := w.ObjectsRecord(Overworld, pos, nil)
 	var o Objects
 	if err := DecodeObjects(rec, &o); err != nil {
 		t.Fatal(err)
 	}
-	again, _ := AppendObjects(nil, &o)
-	if !bytes.Equal(rec, again) {
-		t.Fatal("re-encoded record differs")
+	if _, err := w.Payload(Overworld, pos, o.Payloads, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("payload past the count still stored: %v", err)
 	}
-	for n := range len(rec) {
-		_ = DecodeObjects(rec[:n], &o)
+	if _, err := snap.Payload(Overworld, pos, o.Payloads, nil); err != nil {
+		t.Fatalf("snapshot lost a payload: %v", err)
 	}
-	if _, err := AppendObjects(nil, &Objects{Entities: []Entity{{ID: []byte{1}}}}); err == nil {
-		t.Fatal("short entity ID accepted")
+
+	if err := r.DeleteChunk(Overworld, pos); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Commit(r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Payload(Overworld, pos, 0, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("payload after delete: %v", err)
+	}
+}
+
+func TestLevelDat(t *testing.T) {
+	dir := t.TempDir()
+	w := openTestWorld(t, dir)
+	if _, err := w.LevelDatBytes(nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("new world level.dat: %v", err)
+	}
+	ld := &leveldat.LevelDat{}
+	var d leveldat.Data
+	d.FillDefault()
+	d.LevelName = "hx test"
+	if err := ld.Marshal(d); err != nil {
+		t.Fatal(err)
+	}
+	r := w.NewRound()
+	if err := r.PutLevelDat(ld); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Commit(r); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := w.LevelDatBytes(nil)
+	file, err := os.ReadFile(filepath.Join(dir, LevelDat))
+	if err != nil || !bytes.Equal(stored, file) {
+		t.Fatalf("level.dat copy differs: %v", err)
+	}
+	w.Close()
+	w = openTestWorld(t, dir)
+	defer w.Close()
+	got, err := w.LevelDat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back leveldat.Data
+	if err := got.Unmarshal(&back); err != nil || back.LevelName != "hx test" {
+		t.Fatalf("level name %q, %v", back.LevelName, err)
 	}
 }
 

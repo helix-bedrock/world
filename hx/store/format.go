@@ -48,6 +48,8 @@ var (
 	ErrClosed = errors.New("store: closed")
 	// ErrCorrupt is wrapped by every error about damaged data.
 	ErrCorrupt = errors.New("store: corrupt")
+	// ErrReleased is returned by a snapshot after Release.
+	ErrReleased = errors.New("store: snapshot released")
 )
 
 func errCorrupt(path, what string) error {

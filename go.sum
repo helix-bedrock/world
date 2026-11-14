@@ -27,6 +27,8 @@ github.com/helix-bedrock/protocol v0.0.0-20261030050828-29574cd0fb81 h1:XU8AhIgB
 github.com/helix-bedrock/protocol v0.0.0-20261030050828-29574cd0fb81/go.mod h1:7uEwDr3AXskn3a6zfs+6e+zXH51WVJX+dfUgOyC1TWE=
 github.com/helix-bedrock/protocol v0.0.0-20261114015031-b190681c1e32 h1:3Rx+4Diy1IyiOvgYXukrz0dIASEjQ8lG8rkeyytN4w4=
 github.com/helix-bedrock/protocol v0.0.0-20261114015031-b190681c1e32/go.mod h1:7uEwDr3AXskn3a6zfs+6e+zXH51WVJX+dfUgOyC1TWE=
+github.com/helix-bedrock/protocol v0.0.0-20261114051721-6bc95f374de8 h1:N3d5ULGXEgGL7c7NbsixUceprlTlUNSom2Pt5CMomO0=
+github.com/helix-bedrock/protocol v0.0.0-20261114051721-6bc95f374de8/go.mod h1:7uEwDr3AXskn3a6zfs+6e+zXH51WVJX+dfUgOyC1TWE=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=
 github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
 github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=

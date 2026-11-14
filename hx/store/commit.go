@@ -404,6 +404,9 @@ func (s *Store) applyFile(hf *hxFile, recs []pendingRec, round uint64) {
 	for _, r := range recs {
 		w.chg = append(w.chg, change{key: r.key, e: r.e, del: r.del})
 	}
+	if len(s.snaps) > 0 {
+		s.noteChanges(hf, w.chg)
+	}
 	hf.mu.Lock()
 	w.old = hf.ix.apply(w.chg, w.old[:0])
 	hf.mu.Unlock()

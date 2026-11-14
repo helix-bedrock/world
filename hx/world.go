@@ -34,12 +34,16 @@ const (
 	KindLevel   byte = 4
 	KindPlayer  byte = 5
 	KindMeta    byte = 6
+	KindPayload byte = 7
 )
 
 // formatVersion is the world format version in world.hx.
 const formatVersion = 1
 
-var metaFormatKey = []byte("format")
+var (
+	metaFormatKey   = []byte("format")
+	metaLevelDatKey = []byte("level.dat")
+)
 
 // ErrNotFound is returned for a record that does not exist.
 var ErrNotFound = store.ErrNotFound
@@ -88,6 +92,7 @@ type ChunkPos [2]int32
 const (
 	partTerrain byte = 1
 	partObjects byte = 2
+	partPayload byte = 3
 )
 
 // regionShift makes a region 32x32 chunks.
@@ -102,7 +107,9 @@ func chunkKey(pos ChunkPos, part byte) [3]byte {
 
 // Config configures a World.
 type Config struct {
-	// Blocks is the server's block registry.
+	// Blocks is the server's block registry. Nil opens the world for
+	// conversion only: records are read and written as bytes, and LoadChunk
+	// fails.
 	Blocks chunk.BlockRegistry
 	// Upgrader upgrades block states saved by older versions. Optional.
 	Upgrader *chunk.Upgrader
@@ -110,9 +117,23 @@ type Config struct {
 	Store store.Options
 }
 
+// source is what reads go to: the store, or a snapshot of it.
+type source interface {
+	Get(id store.FileID, key, dst []byte) ([]byte, error)
+	Range(id store.FileID, fn func(key []byte, info store.Info) bool) error
+}
+
+// view holds the read methods World and Snapshot share.
+type view struct {
+	w   *World
+	src source
+}
+
 // World is a Helix world on disk. Reads may run from any goroutine at any
-// time, also during a Commit; Commits are serialised.
+// time, also during a Commit; Commits are serialised. Its read methods see
+// the newest committed round.
 type World struct {
+	view
 	dir   string
 	conf  Config
 	s     *store.Store
@@ -131,14 +152,12 @@ type regionKey struct {
 
 // Open opens the Helix world in dir, creating it if the folder holds none.
 func Open(dir string, conf Config) (*World, error) {
-	if conf.Blocks == nil {
-		return nil, errors.New("hx: open world: no block registry")
-	}
 	s, err := store.Open(dir, conf.Store)
 	if err != nil {
 		return nil, fmt.Errorf("hx: open world: %w", err)
 	}
 	w := &World{dir: dir, conf: conf, s: s, regions: map[regionKey]store.FileID{}}
+	w.view = view{w: w, src: s}
 	if err := w.openFiles(); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -236,39 +255,42 @@ func regionPath(k regionKey) string {
 // TerrainRecord reads the terrain record of a chunk into dst[:0], growing it
 // only if too small, or returns ErrNotFound. With a big enough dst it does not
 // allocate.
-func (w *World) TerrainRecord(dim Dimension, pos ChunkPos, dst []byte) ([]byte, error) {
-	return w.part(dim, pos, partTerrain, dst)
+func (v view) TerrainRecord(dim Dimension, pos ChunkPos, dst []byte) ([]byte, error) {
+	return v.part(dim, pos, partTerrain, dst)
 }
 
 // ObjectsRecord reads the objects record of a chunk, as TerrainRecord does.
-func (w *World) ObjectsRecord(dim Dimension, pos ChunkPos, dst []byte) ([]byte, error) {
-	return w.part(dim, pos, partObjects, dst)
+func (v view) ObjectsRecord(dim Dimension, pos ChunkPos, dst []byte) ([]byte, error) {
+	return v.part(dim, pos, partObjects, dst)
 }
 
-func (w *World) part(dim Dimension, pos ChunkPos, part byte, dst []byte) ([]byte, error) {
-	f, err := w.region(dim, pos)
+func (v view) part(dim Dimension, pos ChunkPos, part byte, dst []byte) ([]byte, error) {
+	f, err := v.w.region(dim, pos)
 	if err != nil {
 		return dst[:0], err
 	}
 	k := chunkKey(pos, part)
-	return w.s.Get(f, k[:], dst)
+	return v.src.Get(f, k[:], dst)
 }
 
 // LoadChunk reads and decodes a chunk's terrain, using buf and t as scratch
 // space; it returns buf for reuse. The chunk is ErrNotFound if not stored.
-func (w *World) LoadChunk(dim Dimension, pos ChunkPos, buf []byte, t *Terrain) (*chunk.Chunk, []byte, error) {
+func (v view) LoadChunk(dim Dimension, pos ChunkPos, buf []byte, t *Terrain) (*chunk.Chunk, []byte, error) {
+	if v.w.conf.Blocks == nil {
+		return nil, buf, errors.New("hx: load chunk: world opened without a block registry")
+	}
 	r, ok := dim.Range()
 	if !ok {
 		return nil, buf, fmt.Errorf("hx: unknown dimension %d", dim)
 	}
-	buf, err := w.TerrainRecord(dim, pos, buf)
+	buf, err := v.TerrainRecord(dim, pos, buf)
 	if err != nil {
 		return nil, buf, err
 	}
 	if err := DecodeTerrain(buf, t); err != nil {
 		return nil, buf, fmt.Errorf("hx: chunk %v in %s: %w", pos, dim.Dir(), err)
 	}
-	c, err := DecodeChunk(t, w.table, w.conf.Upgrader, r)
+	c, err := DecodeChunk(t, v.w.table, v.w.conf.Upgrader, r)
 	if err != nil {
 		return nil, buf, fmt.Errorf("hx: chunk %v in %s: %w", pos, dim.Dir(), err)
 	}
@@ -276,20 +298,20 @@ func (w *World) LoadChunk(dim Dimension, pos ChunkPos, buf []byte, t *Terrain) (
 }
 
 // Level reads a world-wide key into dst[:0], or returns ErrNotFound.
-func (w *World) Level(key string, dst []byte) ([]byte, error) {
-	return w.s.Get(w.level, []byte(key), dst)
+func (v view) Level(key string, dst []byte) ([]byte, error) {
+	return v.src.Get(v.w.level, []byte(key), dst)
 }
 
 // EachLevel calls fn for every world-wide key, in key order, until fn returns
 // false. The key is valid only during the call.
-func (w *World) EachLevel(fn func(key []byte) bool) error {
-	return w.s.Range(w.level, func(key []byte, _ store.Info) bool { return fn(key) })
+func (v view) EachLevel(fn func(key []byte) bool) error {
+	return v.src.Range(v.w.level, func(key []byte, _ store.Info) bool { return fn(key) })
 }
 
 // EachChunk calls fn for every chunk of dim with a terrain record, region by
 // region, until fn returns false.
-func (w *World) EachChunk(dim Dimension, fn func(pos ChunkPos) bool) error {
-	ents, err := os.ReadDir(filepath.Join(w.dir, dim.Dir()))
+func (v view) EachChunk(dim Dimension, fn func(pos ChunkPos) bool) error {
+	ents, err := os.ReadDir(filepath.Join(v.w.dir, dim.Dir()))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -301,7 +323,7 @@ func (w *World) EachChunk(dim Dimension, fn func(pos ChunkPos) bool) error {
 		if !ok {
 			continue
 		}
-		more, err := w.eachRegionChunk(dim, rx, rz, fn)
+		more, err := v.eachRegionChunk(dim, rx, rz, fn)
 		if err != nil || !more {
 			return err
 		}
@@ -309,13 +331,13 @@ func (w *World) EachChunk(dim Dimension, fn func(pos ChunkPos) bool) error {
 	return nil
 }
 
-func (w *World) eachRegionChunk(dim Dimension, rx, rz int32, fn func(ChunkPos) bool) (bool, error) {
-	f, err := w.region(dim, ChunkPos{rx << regionShift, rz << regionShift})
+func (v view) eachRegionChunk(dim Dimension, rx, rz int32, fn func(ChunkPos) bool) (bool, error) {
+	f, err := v.w.region(dim, ChunkPos{rx << regionShift, rz << regionShift})
 	if err != nil {
 		return false, err
 	}
 	more := true
-	err = w.s.Range(f, func(key []byte, _ store.Info) bool {
+	err = v.src.Range(f, func(key []byte, _ store.Info) bool {
 		if len(key) != 3 || key[2] != partTerrain {
 			return true
 		}

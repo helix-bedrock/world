@@ -36,12 +36,12 @@ type playerLookup struct {
 // LoadPlayer returns a player's saved data, found through the lookup record
 // of either ID (the MSA ID first, as it does not change between devices), and
 // false if the player was never saved.
-func (w *World) LoadPlayer(ids PlayerIDs) (map[string]any, bool, error) {
-	look, ok, err := w.playerLookup(ids)
+func (v view) LoadPlayer(ids PlayerIDs) (map[string]any, bool, error) {
+	look, ok, err := v.playerLookup(ids)
 	if !ok || err != nil {
 		return nil, ok, err
 	}
-	b, err := w.s.Get(w.players, []byte(look.ServerID), nil)
+	b, err := v.src.Get(v.w.players, []byte(look.ServerID), nil)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, false, nil
 	}
@@ -110,12 +110,12 @@ func (r *Round) putLookup(ids PlayerIDs, look *playerLookup, known bool) error {
 }
 
 // playerLookup reads the lookup record of the first ID that has one.
-func (w *World) playerLookup(ids PlayerIDs) (playerLookup, bool, error) {
+func (v view) playerLookup(ids PlayerIDs) (playerLookup, bool, error) {
 	for _, id := range [...]string{ids.MsaID, ids.SelfSignedID} {
 		if id == "" {
 			continue
 		}
-		b, err := w.s.Get(w.players, []byte(playerLookupPrefix+id), nil)
+		b, err := v.src.Get(v.w.players, []byte(playerLookupPrefix+id), nil)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
@@ -136,14 +136,14 @@ func (w *World) playerLookup(ids PlayerIDs) (playerLookup, bool, error) {
 
 // PlayerRecord reads a players.hx record by its BDS key into dst[:0], or
 // returns ErrNotFound. For the converter and tools.
-func (w *World) PlayerRecord(key string, dst []byte) ([]byte, error) {
-	return w.s.Get(w.players, []byte(key), dst)
+func (v view) PlayerRecord(key string, dst []byte) ([]byte, error) {
+	return v.src.Get(v.w.players, []byte(key), dst)
 }
 
 // EachPlayerRecord calls fn for every players.hx key, in key order, until fn
 // returns false. The key is valid only during the call.
-func (w *World) EachPlayerRecord(fn func(key []byte) bool) error {
-	return w.s.Range(w.players, func(key []byte, _ store.Info) bool { return fn(key) })
+func (v view) EachPlayerRecord(fn func(key []byte) bool) error {
+	return v.src.Range(v.w.players, func(key []byte, _ store.Info) bool { return fn(key) })
 }
 
 // PutPlayerRecord sets a players.hx record by its BDS key, as BDS stores it.

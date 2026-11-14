@@ -60,6 +60,10 @@ func (b *Batch) newOp(f FileID, kind byte, key []byte) op {
 	return o
 }
 
+// Size is about how many bytes the batch holds: its keys and values, not
+// streamed bodies.
+func (b *Batch) Size() int { return len(b.arena) }
+
 // Len is the number of writes in the batch.
 func (b *Batch) Len() int { return len(b.ops) }
 
