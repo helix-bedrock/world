@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/helix-bedrock/protocol/nbt"
 	"github.com/helix-bedrock/world/hx"
@@ -28,11 +29,19 @@ type Options struct {
 	// RoundSize is how many bytes a save round collects before it is
 	// committed. Default 64 MB.
 	RoundSize int
+	// Progress, if set, is called with how far the conversion has got: at
+	// each phase, then at most once per ProgressEvery (default 1 s), from
+	// the converting goroutine.
+	Progress      func(Progress)
+	ProgressEvery time.Duration
 }
 
 func (o Options) withDefaults() Options {
 	if o.RoundSize <= 0 {
 		o.RoundSize = 64 << 20
+	}
+	if o.ProgressEvery <= 0 {
+		o.ProgressEvery = defaultProgressEvery
 	}
 	return o
 }
@@ -71,6 +80,7 @@ type importer struct {
 	r    *hx.Round
 	opts Options
 	st   subTranslator
+	prog progress
 
 	// group holds the keys of the chunks sharing one x, z, whose keys BDS
 	// sorts together, until the next x, z begins.
@@ -96,12 +106,15 @@ type pendingKey struct {
 }
 
 func (im *importer) run(bdsDir, hxDir string) error {
+	im.prog = newProgress(im.opts)
+	im.prog.phase(PhaseFiles)
 	if err := im.levelDat(bdsDir); err != nil {
 		return err
 	}
 	if err := copyFiles(bdsDir, filepath.Join(hxDir, BDSFilesDir), bdsSkip); err != nil {
 		return err
 	}
+	im.prog.phase(PhaseChunks)
 	if err := im.keys(); err != nil {
 		return err
 	}
@@ -109,10 +122,15 @@ func (im *importer) run(bdsDir, hxDir string) error {
 		return err
 	}
 	slices.Sort(im.referenced)
+	im.prog.phase(PhaseOrphans)
 	if err := im.orphans(); err != nil {
 		return err
 	}
-	return im.commit()
+	if err := im.commit(); err != nil {
+		return err
+	}
+	im.prog.phase(PhaseDone)
+	return nil
 }
 
 func (im *importer) levelDat(bdsDir string) error {
@@ -148,6 +166,7 @@ func (im *importer) keys() error {
 
 func (im *importer) key(it *lsm.Iterator) error {
 	k := it.Key()
+	im.prog.p.Keys++
 	if id, tag, sub, ok := parseChunkKey(k); ok {
 		if !bytes.Equal(k[:8], im.prefix) {
 			if err := im.flushGroup(); err != nil {
@@ -158,6 +177,7 @@ func (im *importer) key(it *lsm.Iterator) error {
 		pk := pendingKey{id: id, tag: tag, sub: sub, key: bytes.Clone(k)}
 		if tag != hx.TagBlockEntities {
 			pk.value = bytes.Clone(it.Value())
+			im.prog.p.Bytes += int64(len(pk.value))
 		}
 		im.group = append(im.group, pk)
 		return nil
@@ -168,8 +188,10 @@ func (im *importer) key(it *lsm.Iterator) error {
 		return nil
 	case bytes.HasPrefix(k, []byte(playerPrefix)):
 		im.r.PutPlayerRecord(string(k), it.Value())
+		im.prog.p.Bytes += int64(len(it.Value()))
 	default:
 		im.r.PutLevel(string(k), it.Value())
+		im.prog.p.Bytes += int64(len(it.Value()))
 	}
 	return im.maybeCommit()
 }
@@ -196,6 +218,7 @@ func (im *importer) flushGroup() error {
 // chunk writes one chunk's terrain and objects.
 func (im *importer) chunk(keys []pendingKey) error {
 	id := keys[0].id
+	im.prog.chunk(id)
 	t := &im.terrain
 	*t = hx.Terrain{Keys: t.Keys[:0], Subs: t.Subs[:0]}
 	im.st.reset()
@@ -240,6 +263,7 @@ func (im *importer) chunk(keys []pendingKey) error {
 	if err := im.r.PutTerrainRecord(id.dim, id.pos, im.rec); err != nil {
 		return err
 	}
+	im.prog.p.Chunks++
 	return im.maybeCommit()
 }
 
@@ -251,6 +275,7 @@ func (im *importer) blockEntities(ow *hx.ObjectsWriter, key []byte) error {
 		return err
 	}
 	defer rc.Close()
+	im.prog.p.Bytes += size
 	cr := nbt.NewCompoundReader(rc, size, nbt.LittleEndian)
 	for {
 		c, err := cr.Next()
@@ -263,6 +288,7 @@ func (im *importer) blockEntities(ow *hx.ObjectsWriter, key []byte) error {
 		if err := ow.BlockEntity(c); err != nil {
 			return err
 		}
+		im.prog.p.BlockEntities++
 		if err := im.maybeCommit(); err != nil {
 			return err
 		}
@@ -295,6 +321,8 @@ func (im *importer) entities(ow *hx.ObjectsWriter, id chunkID) (bool, error) {
 		if err := ow.Entity(aid, data); err != nil {
 			return false, err
 		}
+		im.prog.p.Entities++
+		im.prog.p.Bytes += int64(len(data))
 		if data != nil {
 			im.referenced = append(im.referenced, binary.BigEndian.Uint64(aid))
 		}
@@ -318,6 +346,8 @@ func (im *importer) orphans() error {
 				continue
 			}
 			im.r.PutLevel(string(it.Key()), it.Value())
+			im.prog.p.Keys++
+			im.prog.p.Bytes += int64(len(it.Value()))
 			if err := im.maybeCommit(); err != nil {
 				_ = it.Close()
 				return err
@@ -364,6 +394,7 @@ func (im *importer) digpWhole(id chunkID) bool {
 }
 
 func (im *importer) maybeCommit() error {
+	im.prog.tick()
 	if im.r.Size() < im.opts.RoundSize {
 		return nil
 	}

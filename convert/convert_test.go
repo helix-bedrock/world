@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync/atomic"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/helix-bedrock/protocol/nbt"
 	"github.com/helix-bedrock/world/hx"
@@ -281,7 +281,12 @@ func TestBDSWorld(t *testing.T) {
 	if err := os.CopyFS(cp, os.DirFS(src)); err != nil {
 		t.Fatal(err)
 	}
-	opts := Options{Store: store.Options{NoSync: true}}
+	opts := Options{Store: store.Options{NoSync: true}, Progress: func(p Progress) {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		t.Logf("%6.1fs %-7s %6d chunks %7d keys %7d MB  %6d block entities %6d entities  at %s %v  heap %d MB",
+			p.Elapsed.Seconds(), p.Phase, p.Chunks, p.Keys, p.Bytes>>20, p.BlockEntities, p.Entities, p.Dim.Dir(), p.Pos, ms.HeapInuse>>20)
+	}}
 	peak := watchHeap()
 	start := time.Now()
 	if err := Import(cp, hxDir, opts); err != nil {

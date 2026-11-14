@@ -54,6 +54,7 @@ type exporter struct {
 	table *hx.BlockTable
 	b     lsm.Batch
 	size  int
+	prog  progress
 
 	rec, objRec, key, val []byte
 	terrain               hx.Terrain
@@ -61,6 +62,8 @@ type exporter struct {
 }
 
 func (ex *exporter) run(hxDir, bdsDir string) error {
+	ex.prog = newProgress(ex.opts)
+	ex.prog.phase(PhaseFiles)
 	if err := copyFiles(filepath.Join(hxDir, BDSFilesDir), bdsDir, nil); err != nil {
 		return err
 	}
@@ -76,15 +79,21 @@ func (ex *exporter) run(hxDir, bdsDir string) error {
 	if err != nil {
 		return err
 	}
+	ex.prog.phase(PhaseChunks)
 	for _, dim := range dims {
 		if err := ex.dimension(dim); err != nil {
 			return err
 		}
 	}
+	ex.prog.phase(PhaseRecords)
 	if err := ex.records(); err != nil {
 		return err
 	}
-	return ex.flush()
+	if err := ex.flush(); err != nil {
+		return err
+	}
+	ex.prog.phase(PhaseDone)
+	return nil
 }
 
 // dimensions lists the dimensions with a region folder.
@@ -119,6 +128,8 @@ func (ex *exporter) dimension(dim hx.Dimension) error {
 
 // chunk writes one chunk's keys.
 func (ex *exporter) chunk(id chunkID) error {
+	ex.prog.chunk(id)
+	ex.prog.p.Chunks++
 	var err error
 	if ex.rec, err = ex.snap.TerrainRecord(id.dim, id.pos, ex.rec); err != nil {
 		return fmt.Errorf("convert: chunk %v: %w", id, err)
@@ -195,8 +206,12 @@ func (ex *exporter) blockEntities(id chunkID, shells []hx.Shell) error {
 			}
 		}
 		ex.put(key, ex.val)
+		ex.prog.p.BlockEntities += int64(len(shells))
 		return nil
 	}
+	ex.prog.p.Keys++
+	ex.prog.p.Bytes += int64(size)
+	ex.prog.p.BlockEntities += int64(len(shells))
 	// The shells point into objRec: write the batch before it is reused.
 	sr := &shellReader{snap: ex.snap, id: id, shells: shells}
 	ex.b.PutStream(key, func() (io.ReadCloser, int64, error) { return sr, int64(size), nil })
@@ -227,6 +242,7 @@ func (ex *exporter) entities(id chunkID, ents []hx.Entity) error {
 		}
 		ex.key = append(append(ex.key[:0], actorPrefix...), e.ID...)
 		ex.put(ex.key, ex.val)
+		ex.prog.p.Entities++
 		if err := ex.maybeFlush(); err != nil {
 			return err
 		}
@@ -264,9 +280,12 @@ func (ex *exporter) records() error {
 func (ex *exporter) put(key, value []byte) {
 	ex.b.Put(key, value)
 	ex.size += len(key) + len(value)
+	ex.prog.p.Keys++
+	ex.prog.p.Bytes += int64(len(value))
 }
 
 func (ex *exporter) maybeFlush() error {
+	ex.prog.tick()
 	if ex.size < ex.opts.RoundSize {
 		return nil
 	}
