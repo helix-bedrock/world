@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/golang/snappy v1.0.0
-	github.com/helix-bedrock/protocol v0.0.0-20261114051721-6bc95f374de8
+	github.com/helix-bedrock/protocol v0.0.0-20261114194732-93fcc32c6430
 	github.com/klauspost/compress v1.20.3
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.44.0

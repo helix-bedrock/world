@@ -170,7 +170,7 @@ type World struct {
 	s     *store.Store
 	table *BlockTable
 
-	meta, level, players, blocks store.FileID
+	meta, level, players, blocks, items store.FileID
 
 	regionMu sync.RWMutex
 	regions  map[regionKey]store.FileID
@@ -197,8 +197,8 @@ func Open(dir string, conf Config) (*World, error) {
 }
 
 func (w *World) openFiles() error {
-	ids := [...]*store.FileID{&w.meta, &w.level, &w.players, &w.blocks}
-	for i, name := range [...]string{MetaFile, LevelFile, PlayersFile, BlocksFile} {
+	ids := [...]*store.FileID{&w.meta, &w.level, &w.players, &w.blocks, &w.items}
+	for i, name := range [...]string{MetaFile, LevelFile, PlayersFile, BlocksFile, ItemsFile} {
 		id, err := w.s.File(name)
 		if err != nil {
 			return fmt.Errorf("hx: open world: %w", err)

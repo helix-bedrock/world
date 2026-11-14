@@ -19,6 +19,7 @@ bds/                   the BDS world's other files (convert package)
 blocks.hx              the block table
 level.hx               world-wide keys
 players.hx             players
+items.hx               item contents records
 journal/               the record store's journal
 overworld/r.<x>.<z>.hx regions; also nether/, end/, dim<id>/ for others
 ```
@@ -44,6 +45,7 @@ record.
 | 8 | key list of an incremental backup (`backup.hx`) |
 | 9 | container slot: one item of a split container |
 | 10 | container summary: marks a container split |
+| 11 | item contents: items held inside an item (`items.hx`) |
 
 ## Block table (`blocks.hx`)
 
@@ -130,6 +132,18 @@ export puts them back.
 stores it. `players.hx` keeps BDS's player keys: `player_<id>` lookup records
 (LE NBT `MsaId`, `SelfSignedId`, `ServerId`), one per login ID, and the
 `player_server_<uuid>` record each points at, holding the player's NBT.
+
+## Item contents (`items.hx`)
+
+Helix's own form, beyond BDS: the items held inside an item (a shulker box
+item's `Items` list) may be stored once in `items.hx` instead of in the item.
+Key: the SHA-256 of the body (32 bytes). Body: the list as Little Endian NBT
+without its tag type or name (an `nbt.Raw` list's bytes). The item's `tag`
+then holds `helix:items`, a compound of `sum` (byte array, the key), `size`
+(int, the body's size) and `shown` (the list as a client is shown it: no book pages), in place of
+`Items`. Records are written in a commit of their own before any reference
+to them is saved. Export puts `Items` back from the record. Records no
+reference uses are not removed yet.
 
 ## Record store files
 

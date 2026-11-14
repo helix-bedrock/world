@@ -67,6 +67,8 @@ type exporter struct {
 	rec, objRec, key, val []byte
 	shell                 []byte
 	items                 hx.ItemScratch
+	// tmp holds a record before its item contents references are put back in place.
+	tmp []byte
 	terrain               hx.Terrain
 	objects               hx.Objects
 }
@@ -210,7 +212,7 @@ func (ex *exporter) blockEntities(id chunkID, shells []hx.Shell) error {
 	if size < streamAt {
 		ex.val = ex.val[:0]
 		for _, s := range shells {
-			if ex.val, err = ex.snap.ExpandBlockEntity(id.dim, id.pos, s, &ex.items, &ex.shell, ex.val); err != nil {
+			if ex.val, err = expandInlined(ex.snap, id, s, &ex.items, &ex.shell, &ex.tmp, ex.val); err != nil {
 				return fmt.Errorf("convert: block entities of chunk %v: %w", id, err)
 			}
 		}
@@ -239,7 +241,7 @@ func (ex *exporter) blockEntitiesSize(id chunkID, shells []hx.Shell) (int, error
 	size := 0
 	for _, s := range shells {
 		var err error
-		if ex.val, err = ex.snap.ExpandBlockEntity(id.dim, id.pos, s, &ex.items, &ex.shell, ex.val[:0]); err != nil {
+		if ex.val, err = expandInlined(ex.snap, id, s, &ex.items, &ex.shell, &ex.tmp, ex.val[:0]); err != nil {
 			return 0, fmt.Errorf("convert: block entities of chunk %v: %w", id, err)
 		}
 		size += len(ex.val)
@@ -260,7 +262,10 @@ func (ex *exporter) entities(id chunkID, ents []hx.Entity) error {
 			continue
 		}
 		var err error
-		if ex.val, err = ex.snap.ExpandShell(id.dim, id.pos, e.Shell, ex.val[:0]); err != nil {
+		if ex.tmp, err = ex.snap.ExpandShell(id.dim, id.pos, e.Shell, ex.tmp[:0]); err != nil {
+			return fmt.Errorf("convert: entity of chunk %v: %w", id, err)
+		}
+		if ex.val, err = ex.snap.InlineItemsNBT(ex.tmp, ex.val[:0]); err != nil {
 			return fmt.Errorf("convert: entity of chunk %v: %w", id, err)
 		}
 		ex.key = append(append(ex.key[:0], actorPrefix...), e.ID...)
@@ -283,7 +288,10 @@ func (ex *exporter) records() error {
 	}{{ex.snap.EachLevel, ex.snap.Level}, {ex.snap.EachPlayerRecord, ex.snap.PlayerRecord}} {
 		var gerr error
 		err := src.each(func(key []byte) bool {
-			if ex.val, gerr = src.get(string(key), ex.val); gerr != nil {
+			if ex.tmp, gerr = src.get(string(key), ex.tmp); gerr != nil {
+				return false
+			}
+			if ex.val, gerr = ex.snap.InlineItemsNBT(ex.tmp, ex.val[:0]); gerr != nil {
 				return false
 			}
 			ex.put(key, ex.val)
@@ -336,6 +344,7 @@ type shellReader struct {
 	cur    []byte
 	shell  []byte
 	items  hx.ItemScratch
+	tmp    []byte
 	off    int
 	err    error
 }
@@ -346,7 +355,7 @@ func (sr *shellReader) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		var err error
-		if sr.cur, err = sr.snap.ExpandBlockEntity(sr.id.dim, sr.id.pos, sr.shells[0], &sr.items, &sr.shell, sr.cur[:0]); err != nil {
+		if sr.cur, err = expandInlined(sr.snap, sr.id, sr.shells[0], &sr.items, &sr.shell, &sr.tmp, sr.cur[:0]); err != nil {
 			sr.err = err
 			return 0, err
 		}
@@ -358,6 +367,16 @@ func (sr *shellReader) Read(p []byte) (int, error) {
 }
 
 func (sr *shellReader) Close() error { return nil }
+
+// expandInlined appends a block entity as BDS stores it to dst: split containers' items and
+// item contents records put back in place. tmp is scratch.
+func expandInlined(snap *hx.Snapshot, id chunkID, s hx.Shell, items *hx.ItemScratch, shell, tmp *[]byte, dst []byte) ([]byte, error) {
+	var err error
+	if *tmp, err = snap.ExpandBlockEntity(id.dim, id.pos, s, items, shell, (*tmp)[:0]); err != nil {
+		return nil, err
+	}
+	return snap.InlineItemsNBT(*tmp, dst)
+}
 
 // bdsSkip leaves out what Import stores itself: the database and level.dat.
 func bdsSkip(rel string) bool {
