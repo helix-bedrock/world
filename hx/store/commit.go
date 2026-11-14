@@ -391,7 +391,10 @@ func (s *Store) journalCommit(round uint64) error {
 	w := &s.w
 	jb := append(w.jbuf[:0], make([]byte, commitHeaderLen)...)
 	jb = binary.AppendUvarint(jb, round)
-	jb = binary.AppendUvarint(jb, uint64(len(w.files)))
+	// Count the files with records, not w.files: a file whose every write was skipped as
+	// unchanged is in w.files but writes nothing here, and a count above the files that
+	// follow makes the record unreadable on replay.
+	jb = binary.AppendUvarint(jb, uint64(commitFiles(w.recs)))
 	for i := 0; i < len(w.recs); {
 		hf := w.recs[i].file
 		end := i + 1
@@ -403,6 +406,18 @@ func (s *Store) journalCommit(round uint64) error {
 	}
 	w.jbuf = jb
 	return s.j.append(jb)
+}
+
+// commitFiles is how many files the round's records touch; records of one file are
+// next to each other.
+func commitFiles(recs []pendingRec) int {
+	n := 0
+	for i := range recs {
+		if i == 0 || recs[i].file != recs[i-1].file {
+			n++
+		}
+	}
+	return n
 }
 
 func appendCommitFile(jb []byte, path string, recs []pendingRec) []byte {
