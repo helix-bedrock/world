@@ -503,3 +503,14 @@ func (s *Store) maintain() error {
 	s.evict()
 	return nil
 }
+
+// Holds reports whether key in file id already holds body as a record of kind, so a write of
+// the same bytes may be left out before it takes memory in a batch. Only records this run
+// wrote are known by their checksum; for others it reports false.
+func (s *Store) Holds(id FileID, kind byte, key, body []byte) bool {
+	hf, err := s.fileOf(id)
+	if err != nil {
+		return false
+	}
+	return hf.unchanged(key, kind, body, crc32Of(body))
+}

@@ -53,6 +53,10 @@ type scratch struct {
 	data3D          []byte
 	head, ids       []byte
 	enc             bytes.Buffer
+	// items and whole are for putting split containers' items back.
+	items hx.ItemScratch
+	whole []byte
+	split splitScratch
 }
 
 func (db *DB) getScratch() *scratch  { return db.scratch.Get().(*scratch) } //nolint:forcetypeassert // only scratches go in
@@ -190,7 +194,7 @@ func (db *DB) loadObjects(s *scratch, dim hx.Dimension, pos hx.ChunkPos, col *ch
 	}
 	if !db.conf.SkipBlockEntities {
 		if err := db.eachShell(s, dim, pos, o.BlockEntities, func(c []byte) error {
-			m, err := nbt.DecodeWithout(c, nbt.LittleEndian, nil)
+			m, err := db.decodeWithItems(s, dim, pos, c)
 			if err != nil {
 				return err
 			}
@@ -329,6 +333,16 @@ func (db *DB) StoreColumn(pos mcdb.ChunkPos, dim mcdb.Dimension, col *chunk.Colu
 	if err := db.terrainKeys(s, dim, col); err != nil {
 		return fmt.Errorf("hxdb: store column %v (%v): %w", pos, dim, err)
 	}
+	// Containers' slots are written first, outside the lock, in rounds of their own: they
+	// may be gigabytes, and the round every store shares must stay small.
+	bes, err := db.splitContainers(&s.split, hx.Dimension(dim), hx.ChunkPos(pos), col)
+	if err != nil {
+		return fmt.Errorf("hxdb: store column %v (%v): %w", pos, dim, err)
+	}
+	split := *col
+	split.BlockEntities = bes
+	col = &split
+	db.waitForRoom()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if err := db.storeColumn(s, hx.Dimension(dim), hx.ChunkPos(pos), col); err != nil {

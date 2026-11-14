@@ -76,7 +76,13 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   `mcdb.ChunkMetaData`, finalisation, blending, Extra), one save round
   committed every 5 s or at 64 MB; a chunk or player stored again before its
   round is committed commits that round first, level keys are read from the
-  round. `KeepBlockEntities` keeps shells and their payloads as stored
+  round. Containers are stored split (`containers.go`, `hx/slots.go`): a
+  block entity's `Items` go out as one slot record per item plus a summary, each slot encoded
+  alone and written only when its bytes changed, in side rounds committed as they reach
+  `RoundSize` (so a save of chests of gigabytes holds about one round in memory); reads put
+  `Items` back (whole, or light from the summary for `Config.LightItems` ids in
+  `EachBlockEntity`); export puts them back, `RestoreChunk` copies them. A store waits while
+  the shared round is over twice `RoundSize` (`waitForRoom`). `KeepBlockEntities` keeps shells and their payloads as stored
   (`ObjectsWriter.KeepBlockEntity`). Chunks only shown load in a stage of
   their own: `LoadTerrain` (no objects) and `EachBlockEntityView` (block
   entities without the fields named, a cut field's payload read only for

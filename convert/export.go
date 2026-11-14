@@ -65,6 +65,8 @@ type exporter struct {
 	prog  progress
 
 	rec, objRec, key, val []byte
+	shell                 []byte
+	items                 hx.ItemScratch
 	terrain               hx.Terrain
 	objects               hx.Objects
 }
@@ -200,16 +202,15 @@ func (ex *exporter) chunkObjects(id chunkID) error {
 // blockEntities writes the chunk's block entity value: built in memory when
 // small, streamed one shell at a time when big.
 func (ex *exporter) blockEntities(id chunkID, shells []hx.Shell) error {
-	size := 0
-	for _, s := range shells {
-		size += s.Size()
+	size, err := ex.blockEntitiesSize(id, shells)
+	if err != nil {
+		return err
 	}
 	key := ex.chunkKey(id, hx.TagBlockEntities)
 	if size < streamAt {
 		ex.val = ex.val[:0]
 		for _, s := range shells {
-			var err error
-			if ex.val, err = ex.snap.ExpandShell(id.dim, id.pos, s, ex.val); err != nil {
+			if ex.val, err = ex.snap.ExpandBlockEntity(id.dim, id.pos, s, &ex.items, &ex.shell, ex.val); err != nil {
 				return fmt.Errorf("convert: block entities of chunk %v: %w", id, err)
 			}
 		}
@@ -230,6 +231,20 @@ func (ex *exporter) blockEntities(id chunkID, shells []hx.Shell) error {
 		return fmt.Errorf("convert: block entities of chunk %v: %w", id, sr.err)
 	}
 	return nil
+}
+
+// blockEntitiesSize is the size of the chunk's block entity value, split containers' items
+// put back. Each split one is expanded to measure it, one at a time.
+func (ex *exporter) blockEntitiesSize(id chunkID, shells []hx.Shell) (int, error) {
+	size := 0
+	for _, s := range shells {
+		var err error
+		if ex.val, err = ex.snap.ExpandBlockEntity(id.dim, id.pos, s, &ex.items, &ex.shell, ex.val[:0]); err != nil {
+			return 0, fmt.Errorf("convert: block entities of chunk %v: %w", id, err)
+		}
+		size += len(ex.val)
+	}
+	return size, nil
 }
 
 // entities writes the chunk's digp list and actor records.
@@ -319,6 +334,8 @@ type shellReader struct {
 	id     chunkID
 	shells []hx.Shell
 	cur    []byte
+	shell  []byte
+	items  hx.ItemScratch
 	off    int
 	err    error
 }
@@ -329,7 +346,7 @@ func (sr *shellReader) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		var err error
-		if sr.cur, err = sr.snap.ExpandShell(sr.id.dim, sr.id.pos, sr.shells[0], sr.cur[:0]); err != nil {
+		if sr.cur, err = sr.snap.ExpandBlockEntity(sr.id.dim, sr.id.pos, sr.shells[0], &sr.items, &sr.shell, sr.cur[:0]); err != nil {
 			sr.err = err
 			return 0, err
 		}

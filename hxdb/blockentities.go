@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/helix-bedrock/protocol/nbt"
 	"github.com/helix-bedrock/world/cube"
 	"github.com/helix-bedrock/world/hx"
 	"github.com/helix-bedrock/world/mcdb"
@@ -33,7 +32,10 @@ func (db *DB) EachBlockEntity(chunkPos mcdb.ChunkPos, dim mcdb.Dimension, fn fun
 		if s.shell, err = db.w.ExpandShell(d, p, sh, s.shell[:0]); err != nil {
 			return fmt.Errorf("hxdb: block entities of %v (%v): %w", chunkPos, dim, err)
 		}
-		if err := fn(at, s.shell); err != nil {
+		if s.whole, err = db.withItems(s, d, p, at, s.shell, db.conf.LightItems, s.whole[:0]); err != nil {
+			return fmt.Errorf("hxdb: block entities of %v (%v): %w", chunkPos, dim, err)
+		}
+		if err := fn(at, s.whole); err != nil {
 			return err
 		}
 	}
@@ -66,7 +68,7 @@ func (db *DB) LoadBlockEntity(chunkPos mcdb.ChunkPos, dim mcdb.Dimension, pos cu
 			if s.shell, err = db.w.ExpandShell(d, p, sh, s.shell[:0]); err != nil {
 				return nil, fmt.Errorf("hxdb: load block entity %v: %w", pos, err)
 			}
-			m, err := nbt.DecodeWithout(s.shell, nbt.LittleEndian, nil)
+			m, err := db.decodeWithItems(s, d, p, s.shell)
 			if err != nil {
 				return nil, fmt.Errorf("hxdb: load block entity %v: %w", pos, err)
 			}

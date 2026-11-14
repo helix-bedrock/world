@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/helix-bedrock/protocol/nbt"
 	"github.com/helix-bedrock/world/hx/store"
 )
 
@@ -436,7 +438,82 @@ func (r *Round) RestoreChunk(from *Snapshot, dim Dimension, pos ChunkPos) error 
 			return err
 		}
 	}
+	return r.restoreContainers(from, src, dst, dim, pos)
+}
+
+// restoreContainers copies the slot and summary records of the chunk's split containers,
+// for every block entity either side has, deleting what from does not hold.
+func (r *Round) restoreContainers(from *Snapshot, src, dst store.FileID, dim Dimension, pos ChunkPos) error {
+	var places []LocalPos
+	for _, v := range [...]view{from.view, r.w.view} {
+		var err error
+		if places, err = v.blockEntityPlaces(dim, pos, places); err != nil {
+			return err
+		}
+	}
+	for _, at := range places {
+		var slots [256]bool
+		for _, v := range [...]view{from.view, r.w.view} {
+			sum, err := v.Summary(dim, pos, at, nil)
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			list, err := SummarySlots(sum)
+			if err != nil {
+				return err
+			}
+			for _, sl := range list {
+				slots[sl] = true
+			}
+		}
+		k := containerKey(pos, at, partSummary)
+		if err := r.copyRaw(from, src, dst, k[:]); err != nil {
+			return err
+		}
+		for sl, used := range slots {
+			if !used {
+				continue
+			}
+			sk := slotKey(pos, at, uint8(sl)) //nolint:gosec // < 256
+			if err := r.copyRaw(from, src, dst, sk[:]); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+// blockEntityPlaces appends the positions of the chunk's stored block entities not in dst
+// yet.
+func (v view) blockEntityPlaces(dim Dimension, pos ChunkPos, dst []LocalPos) ([]LocalPos, error) {
+	rec, err := v.ObjectsRecord(dim, pos, nil)
+	if errors.Is(err, ErrNotFound) {
+		return dst, nil
+	}
+	if err != nil {
+		return dst, err
+	}
+	var o Objects
+	if err := DecodeObjects(rec, &o); err != nil {
+		return dst, err
+	}
+	for _, sh := range o.BlockEntities {
+		m, err := nbt.DecodeWithout(sh.Data, nbt.LittleEndian, notBlockPos)
+		if err != nil {
+			return dst, fmt.Errorf("hx: block entity position: %w", err)
+		}
+		x, _ := m["x"].(int32)
+		y, _ := m["y"].(int32)
+		z, _ := m["z"].(int32)
+		at := Local(int(x), int(y), int(z))
+		if !slices.Contains(dst, at) {
+			dst = append(dst, at)
+		}
+	}
+	return dst, nil
 }
 
 // checkRestoreSource checks once per source world that its block table is a

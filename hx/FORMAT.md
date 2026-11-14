@@ -42,6 +42,8 @@ record.
 | 6 | world metadata (`world.hx`) |
 | 7 | payload: a field cut out of a shell |
 | 8 | key list of an incremental backup (`backup.hx`) |
+| 9 | container slot: one item of a split container |
+| 10 | container summary: marks a container split |
 
 ## Block table (`blocks.hx`)
 
@@ -105,6 +107,22 @@ one past the highest number in use. A save may keep a block entity's shell
 as stored with its payload numbers (a chest that did not change is not
 rewritten); new shells take the free numbers, which may leave gaps, and the
 save deletes every old payload neither kept nor written again.
+
+**Split containers.** A block entity's `Items` list may be kept out of its
+shell, one record per slot, so a change of one slot writes one record and a
+reader that needs only counts never reads the items. **Container summary**
+(kind 10): key = the chunk's 2-byte index, part 5, the block's x | z << 4
+(one byte, in-chunk), its y (big-endian i16); body = the slot count n (u8),
+the n slot numbers, then the light `Items` field (tag 9, name, list of
+compounds) of the items without their `tag` compounds. **Container slot**
+(kind 9): key = the summary's key with part 4, then the slot (u8); body = the
+item as one compound of BDS's `Items` list (fields and end tag, no tag type or
+name). A summary marks the container split: readers put `Items` back from the
+slots in summary order, over any `Items` the shell still holds (a crash
+between the slot records' commit and the objects record's). Slot records are
+committed as they are written, in rounds of their own, before the chunk's
+objects record. Import keeps BDS's `Items` inline; Helix's saves split them;
+export puts them back.
 
 ## Level keys and players
 

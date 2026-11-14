@@ -45,6 +45,12 @@ type Config struct {
 	// SkipBlockEntities makes LoadColumn leave block entities out, for the
 	// caller to read one at a time (EachBlockEntity, LoadBlockEntity).
 	SkipBlockEntities bool
+	// LightItems names the block entity ids EachBlockEntity gives with their split
+	// container's items light: without each item's "tag", read from the container's summary
+	// instead of its slots. For a caller that loads containers with their items left on disk
+	// (counts only) and reads them whole later through LoadBlockEntity. Nil gives every
+	// container whole.
+	LightItems func(id string) bool
 	// Store configures the record store.
 	Store store.Options
 }
@@ -246,6 +252,20 @@ func (db *DB) grown() {
 	select {
 	case db.kick <- struct{}{}:
 	default:
+	}
+}
+
+// waitForRoom holds a store back while the shared round is over twice its size: the store
+// commits it itself, so rounds stay bounded however fast columns come in.
+func (db *DB) waitForRoom() {
+	db.mu.Lock()
+	over := db.round.Size() >= 2*db.conf.RoundSize
+	db.mu.Unlock()
+	if !over {
+		return
+	}
+	if err := db.Flush(); err != nil {
+		db.conf.Log.Error("hxdb: " + err.Error())
 	}
 }
 
