@@ -49,8 +49,12 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   (`blocks.go`, every block state once as BDS's palette bytes, IDs resolved
   to runtime IDs) and the chunk terrain record (`terrain.go`, `chunk.go`:
   packed words as BDS stores them, palettes of block table IDs, the small
-  BDS chunk keys kept byte for byte). Decoding a terrain record must stay
-  at 0 allocations (`BenchmarkDecodeTerrain`).
+  BDS chunk keys kept byte for byte), the objects record (`objects.go`:
+  block entities, ticks and entities as BDS stores them), and the world
+  provider (`world.go`: regions of 32x32 chunks, reads; `round.go`: save
+  rounds, atomic across files; `players.go`: BDS's player keys). Decoding a
+  terrain record and a warm terrain read must stay at 0 allocations
+  (`BenchmarkDecodeTerrain`, `BenchmarkLoadTerrain`).
 - `chunk`: chunks, sub chunks, palettes and paletted storage; disk and network
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.

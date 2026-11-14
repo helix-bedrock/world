@@ -151,20 +151,28 @@ func DecodeTerrain(rec []byte, t *Terrain) error {
 	if len(rec) == 0 || rec[0] != terrainVersion {
 		return fmt.Errorf("%w: unknown version", errTerrain)
 	}
-	rest := rec[1:]
+	if err := eachSection(rec[1:], errTerrain, t.section); err != nil {
+		return err
+	}
+	t.linkLayers()
+	return nil
+}
+
+// eachSection calls fn for every section of a record after its version byte.
+// corrupt is the error a bad length wraps.
+func eachSection(rest []byte, corrupt error, fn func(tag byte, body []byte) error) error {
 	for len(rest) > 0 {
 		tag := rest[0]
 		n, k := binary.Uvarint(rest[1:])
 		if k <= 0 || n > uint64(len(rest)-1-k) {
-			return fmt.Errorf("%w: section length", errTerrain)
+			return fmt.Errorf("%w: section length", corrupt)
 		}
 		body := rest[1+k : 1+k+int(n)] //nolint:gosec // checked above
 		rest = rest[1+k+int(n):]       //nolint:gosec // checked above
-		if err := t.section(tag, body); err != nil {
+		if err := fn(tag, body); err != nil {
 			return err
 		}
 	}
-	t.linkLayers()
 	return nil
 }
 

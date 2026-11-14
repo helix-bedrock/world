@@ -5,9 +5,27 @@ the `.github` repo's `API_DESIGN.md`, "World data redesign", sections 4 to 6.
 All integers are little-endian; varints are unsigned LEB128 (Go's
 `binary.AppendUvarint`). Checksums are CRC-32C (Castagnoli).
 
-This file grows with the code: the record store (`hx/store`), the block
-table and the terrain record are described here; the other chunk parts,
-players and level data come next.
+This file grows with the code. Described so far: the record store
+(`hx/store`), the world's files, the block table, the terrain and objects
+records, players and level keys. Shells and payloads come next.
+
+## Files of a world
+
+```
+level.dat              BDS's own file, unchanged
+world.hx               key "format": format version (LE u32, 1)
+blocks.hx              the block table
+level.hx               world-wide keys
+players.hx             players
+journal/               the record store's journal
+overworld/r.<x>.<z>.hx regions; also nether/, end/, dim<id>/ for others
+```
+
+A region holds 32x32 chunks: region X = chunk X >> 5 (rounding down, also
+for negative chunks). A chunk part's key in its region is 3 bytes: the
+chunk's index in the region as a big-endian u16, `(z & 31) * 32 + (x & 31)`,
+then the part: 1 terrain, 2 objects. A chunk exists when it has a terrain
+record.
 
 ## Record kinds
 
@@ -15,6 +33,10 @@ players and level data come next.
 | --- | --- |
 | 1 | block table entry (`blocks.hx`) |
 | 2 | chunk terrain |
+| 3 | chunk objects |
+| 4 | world-wide key (`level.hx`) |
+| 5 | player record (`players.hx`) |
+| 6 | world metadata (`world.hx`) |
 
 ## Block table (`blocks.hx`)
 
@@ -49,6 +71,24 @@ block table ID (varint). Every index must point into the palette.
 
 Raw sub chunks hold what the converter could not translate exactly. Sub
 chunks with no layers are not written.
+
+## Objects record
+
+A format version byte (1), then sections as in the terrain record:
+
+| Tag | Section | Body |
+| --- | --- | --- |
+| 1 | chunk key | a BDS chunk key that belongs to the chunk's objects: `1` block entities, `2` entities (old worlds), `3` pending ticks, `;` random ticks; tag byte then value as BDS stores it |
+| 2 | entity | the 8-byte actor ID as in BDS's `actorprefix` key, then the entity's NBT as stored; in the order of BDS's `digp` list |
+
+Every other BDS chunk key goes in the terrain record.
+
+## Level keys and players
+
+`level.hx` keeps every world-wide BDS key under its BDS name, value as BDS
+stores it. `players.hx` keeps BDS's player keys: `player_<id>` lookup records
+(LE NBT `MsaId`, `SelfSignedId`, `ServerId`), one per login ID, and the
+`player_server_<uuid>` record each points at, holding the player's NBT.
 
 ## Record store files
 
