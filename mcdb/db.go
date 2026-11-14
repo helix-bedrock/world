@@ -455,7 +455,9 @@ func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 	db.storeLegacyStates(t, k, col.Chunk.LegacyStates())
 	db.storeExtraTags(t, k, col.Extra)
 	db.storeEntities(t, k, col.Entities)
-	db.storeBlockEntities(t, k, col.BlockEntities)
+	if !col.KeepBlockEntities {
+		db.storeBlockEntities(t, k, col.BlockEntities)
+	}
 	db.storeScheduledUpdates(t, k, keyPendingScheduledTicks, col.Tick, col.ScheduledBlocks)
 	db.storeScheduledUpdates(t, k, keyRandomTicks, col.RandomTick, col.RandomTicks)
 

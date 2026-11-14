@@ -10,11 +10,16 @@ import (
 // Column is a chunk with everything saved alongside it: entities, block
 // entities, its tick and pending scheduled block updates.
 type Column struct {
-	Chunk           *Chunk
-	Entities        []Entity
-	BlockEntities   []BlockEntity
-	Tick            int64
-	ScheduledBlocks []ScheduledBlockUpdate
+	Chunk         *Chunk
+	Entities      []Entity
+	BlockEntities []BlockEntity
+	// KeepBlockEntities leaves the block entities already stored as they are: a
+	// store neither writes nor deletes them, and BlockEntities is ignored. A save
+	// in which no block entity changed sets it, so a chunk of huge chests is not
+	// encoded and written again only because a mob or tick queue in it changed.
+	KeepBlockEntities bool
+	Tick              int64
+	ScheduledBlocks   []ScheduledBlockUpdate
 	// RandomTick and RandomTicks are the chunk's second tick queue, BDS's
 	// random ticking queue: its clock and the updates due on it. The clock
 	// is separate from Tick: BDS advances it by the random tick speed each
