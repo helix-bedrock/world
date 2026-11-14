@@ -84,7 +84,11 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   `EachBlockEntity`); export puts them back, `RestoreChunk` copies them. A store waits while
   the shared round is over twice `RoundSize` (`waitForRoom`). `StoreLinked` (mcdb's optional
   `LinkedStore`) stores a column and players in one commit, after committing everything older,
-  so items moved between a player and a container never land on one side only. `KeepBlockEntities` keeps shells and their payloads as stored
+  so items moved between a player and a container never land on one side only. Item contents (`hx/items.go`, `hxdb/items.go`): the items held
+  inside an item (a shulker box's `Items`) may live in `items.hx`, keyed by their SHA-256,
+  committed on their own (`StoreItems`) before any `helix:items` reference to them is saved;
+  export puts `Items` back (`InlineItemsNBT`); records no reference uses are not removed yet.
+  `KeepBlockEntities` keeps shells and their payloads as stored
   (`ObjectsWriter.KeepBlockEntity`). Chunks only shown load in a stage of
   their own: `LoadTerrain` (no objects) and `EachBlockEntityView` (block
   entities without the fields named, a cut field's payload read only for

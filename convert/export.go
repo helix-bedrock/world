@@ -68,9 +68,9 @@ type exporter struct {
 	shell                 []byte
 	items                 hx.ItemScratch
 	// tmp holds a record before its item contents references are put back in place.
-	tmp []byte
-	terrain               hx.Terrain
-	objects               hx.Objects
+	tmp     []byte
+	terrain hx.Terrain
+	objects hx.Objects
 }
 
 func (ex *exporter) run(hxDir, bdsDir string) error {
