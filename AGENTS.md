@@ -36,6 +36,15 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   writes, big values streamed into tables of their own and copied as stored
   by compaction, a small-block cache. Checked against `leveldb` both ways and
   on BDS worlds (`TestBDSWorld`, `LSM_BDS_WORLD`).
+- `hx/store`: the record store under Helix's own world format (`.hx`, design
+  in `.github/API_DESIGN.md` "World data redesign", bytes in `hx/FORMAT.md`):
+  checksummed records never written over, a flat in-memory index per file
+  within a byte budget, save rounds made atomic across files by one journal,
+  checkpoints to A/B superblocks, generations so freed space is reused only
+  when no read can see it, streamed big records. Reads and steady-state
+  rounds must stay at 0 allocations (`bench_test.go`). `TestCrash` stops a
+  fake disk (`memfs_test.go`) at random moments, losing or tearing unforced
+  writes; any change to write order must keep it passing.
 - `chunk`: chunks, sub chunks, palettes and paletted storage; disk and network
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.
@@ -70,7 +79,9 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
    in values the caller creates (`chunk.NewUpgrader`, `blockupgrader.New`).
 5. Unknown `level.dat` fields are kept and written back unchanged.
 6. Never import the engine or `helix-api`.
-7. Storage is one-to-one with BDS (currently 1.26.60): every key BDS writes,
+7. The BDS side (`lsm`, `leveldb`, `mcdb`) is one-to-one with BDS (currently
+   1.26.60); Helix's own format (`hx`) must convert to and from it without
+   loss. For the BDS side: every key BDS writes,
    its format and how BDS reads it. Check changes by round-tripping a world
    BDS saved (load every column, store it, compare every key byte for byte)
    and regenerate the key map with the `dump-storage-keys` skill on a new
