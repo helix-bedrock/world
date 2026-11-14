@@ -28,7 +28,13 @@ func (db *DB) readChunk(k dbKey) (*chunkReader, error) {
 		key := it.Key()
 		// The chunk's own keys are its prefix and a tag, and a sub chunk index for
 		// sub chunks. Longer ones under an Overworld prefix are another dimension's.
-		if extra := len(key) - len(prefix); extra != 1 && extra != 2 {
+		extra := len(key) - len(prefix)
+		if extra != 1 && extra != 2 {
+			continue
+		}
+		if extra == 1 && key[len(key)-1] == keyBlockEntities {
+			// Read as a stream when asked (blockEntityStream): it may be hundreds of
+			// megabytes, and the iterator reads no value it is not asked for.
 			continue
 		}
 		rd.vals[string(key)] = bytes.Clone(it.Value())
@@ -50,7 +56,7 @@ func (rd *chunkReader) get(key []byte) ([]byte, error) {
 		if v.deleted {
 			return nil, ErrNotFound
 		}
-		return v.data, nil
+		return v.bytes()
 	}
 	if v, ok := rd.vals[string(key)]; ok {
 		return v, nil

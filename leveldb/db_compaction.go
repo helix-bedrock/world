@@ -8,12 +8,14 @@ package leveldb
 
 import (
 	"fmt"
+	"io"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/helix-bedrock/world/leveldb/errors"
+	"github.com/helix-bedrock/world/leveldb/iterator"
 	"github.com/helix-bedrock/world/leveldb/opt"
 	"github.com/helix-bedrock/world/leveldb/storage"
 )
@@ -377,6 +379,23 @@ type tableCompactionBuilder struct {
 }
 
 func (b *tableCompactionBuilder) appendKV(key, value []byte) error {
+	if err := b.ensureTable(); err != nil {
+		return err
+	}
+	return b.tw.append(key, value)
+}
+
+// appendKVStream is appendKV with a value read from a stream, so a big value moves from
+// table to table without being held whole.
+func (b *tableCompactionBuilder) appendKVStream(key []byte, size int64, value io.Reader) error {
+	if err := b.ensureTable(); err != nil {
+		return err
+	}
+	return b.tw.appendStream(key, size, value)
+}
+
+// ensureTable creates the table being built if there is none.
+func (b *tableCompactionBuilder) ensureTable() error {
 	// Create new table if not already.
 	if b.tw == nil {
 		// Check for pause event.
@@ -397,9 +416,7 @@ func (b *tableCompactionBuilder) appendKV(key, value []byte) error {
 			return err
 		}
 	}
-
-	// Write key/value into table.
-	return b.tw.append(key, value)
+	return nil
 }
 
 func (b *tableCompactionBuilder) needFlush() bool {
@@ -528,7 +545,11 @@ func (b *tableCompactionBuilder) run(cnt *compactionTransactCounter) (err error)
 			b.kerrCnt++
 		}
 
-		if err := b.appendKV(ikey, iter.Value()); err != nil {
+		if rd, size, ok := iterator.ValueStream(iter); ok {
+			if err := b.appendKVStream(ikey, size, rd); err != nil {
+				return err
+			}
+		} else if err := b.appendKV(ikey, iter.Value()); err != nil {
 			return err
 		}
 	}

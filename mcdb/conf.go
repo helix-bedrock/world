@@ -49,6 +49,11 @@ type Config struct {
 	// waits; a chunk bigger than the budget loads alone. Zero means
 	// DefaultLoadBudget; negative means no limit.
 	LoadBudget int64
+	// SkipBlockEntities makes LoadColumn leave block entities out, for the caller to read
+	// one at a time with EachBlockEntity: a chunk's block entities are one value, which
+	// chests full of books make hundreds of megabytes, and read that way it is never held
+	// whole.
+	SkipBlockEntities bool
 }
 
 // Open opens the world in dir, creating it if needed. If a level.dat is

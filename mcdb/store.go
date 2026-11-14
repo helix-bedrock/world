@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 
 	"github.com/helix-bedrock/world/chunk"
+	"github.com/helix-bedrock/world/cube"
 	"github.com/helix-bedrock/world/leveldb"
 	"github.com/helix-bedrock/world/leveldb/util"
 )
@@ -47,6 +50,16 @@ type WorldStore interface {
 	Close() error
 }
 
+// BlockEntityLoader is a WorldStore that reads stored block entities one at a time, so an
+// engine never holds a chunk's block entity value whole and can leave block entities on disk
+// while nothing uses them. EachBlockEntity gives every block entity of a chunk as stored,
+// each compound valid only during the call; LoadBlockEntity reads one. Safe for concurrent
+// use; it sees every column stored before.
+type BlockEntityLoader interface {
+	EachBlockEntity(chunk ChunkPos, dim Dimension, fn func(pos cube.Pos, raw []byte) error) error
+	LoadBlockEntity(chunk ChunkPos, dim Dimension, pos cube.Pos) (map[string]any, error)
+}
+
 // PlayerStore saves players the way BDS does: the player's data in one
 // record, found through one lookup record per login ID.
 type PlayerStore interface {
@@ -79,10 +92,22 @@ type KV interface {
 	Close() error
 }
 
-// KVWrite is a Put of Value at Key, or a Delete of Key.
+// KVWrite is a Put of Value at Key, or a Delete of Key. Only a KVStreamer is given a Put of a
+// value read from Stream instead, Size bytes, which it must not hold whole.
 type KVWrite struct {
 	Key, Value []byte
 	Delete     bool
+	Stream     func() (io.ReadCloser, int64, error)
+	Size       int64
+}
+
+// KVStreamer is a KV that reads and writes big values as streams, so a value of hundreds of
+// megabytes (a chunk's block entities) is never held whole. Its Write takes KVWrite.Stream.
+type KVStreamer interface {
+	KV
+	// GetStream returns the value of key as a stream with its size, or ErrNotFound. The
+	// reader must be closed.
+	GetStream(key []byte) (io.ReadCloser, int64, error)
 }
 
 // KVIterator walks keys in order. Key and Value are only valid until the
@@ -100,7 +125,14 @@ type levelDB struct{ db *leveldb.DB }
 
 func (l levelDB) Get(key []byte) ([]byte, error) { return l.db.Get(key, nil) }
 
+func (l levelDB) GetStream(key []byte) (io.ReadCloser, int64, error) {
+	return l.db.GetStream(key, nil)
+}
+
 func (l levelDB) Write(writes []KVWrite) error {
+	if slices.ContainsFunc(writes, func(w KVWrite) bool { return w.Stream != nil }) {
+		return l.writeStreams(writes)
+	}
 	batch := leveldb.MakeBatch(len(writes))
 	for _, w := range writes {
 		if w.Delete {
@@ -110,6 +142,44 @@ func (l levelDB) Write(writes []KVWrite) error {
 		}
 	}
 	return l.db.Write(batch, nil)
+}
+
+// writeStreams applies writes with streamed values in one transaction: each streamed value
+// goes into a table of its own as it is read, and the transaction commits them all at once.
+func (l levelDB) writeStreams(writes []KVWrite) error {
+	tr, err := l.db.OpenTransaction()
+	if err != nil {
+		return err
+	}
+	for _, w := range writes {
+		switch {
+		case w.Delete:
+			err = tr.Delete(w.Key, nil)
+		case w.Stream != nil:
+			err = putStream(tr, w)
+		default:
+			err = tr.Put(w.Key, w.Value, nil)
+		}
+		if err != nil {
+			tr.Discard()
+			return fmt.Errorf("write %q: %w", w.Key, err)
+		}
+	}
+	if err := tr.Commit(); err != nil {
+		tr.Discard()
+		return err
+	}
+	return nil
+}
+
+// putStream writes one streamed value into tr.
+func putStream(tr *leveldb.Transaction, w KVWrite) error {
+	rc, _, err := w.Stream()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	return tr.PutStream(w.Key, w.Size, rc)
 }
 
 func (l levelDB) NewIterator(prefix []byte) KVIterator {
@@ -122,6 +192,7 @@ func (l levelDB) NewIterator(prefix []byte) KVIterator {
 func (l levelDB) Close() error { return l.db.Close() }
 
 var (
+	_ KVStreamer  = levelDB{}
 	_ WorldStore  = (*DB)(nil)
 	_ PlayerStore = (*DB)(nil)
 )

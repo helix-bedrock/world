@@ -46,10 +46,17 @@ and PRs that only change CI, docs or formatting.
   [pmmp/leveldb](https://github.com/pmmp/leveldb/blob/aba9e148149bda96c5212905c67275a53e701b1c/include/leveldb/options.h)
   (BSD-3-Clause, branch `mojang-compatible`); no code was copied.
 - `BufferPool` keeps no buffer over 1 MiB, and inflating a block over
-  256 KiB starts at twice its size, not four times: a huge pooled buffer handed
-  to a small block read pinned all of it in the block cache, which counts the
-  block's length, so a world with chunks of hundreds of megabytes grew the
-  cache to gigabytes.
+  256 KiB is counted first and inflated into a buffer of exactly its size: a
+  huge pooled buffer handed to a small block read pinned all of it in the block
+  cache, which counts the block's length, so a world with chunks of hundreds of
+  megabytes grew the cache to gigabytes.
+- Big values are streamed, never held whole (`table/stream.go`,
+  `db_stream.go`): a data block of 1 MiB or more is inflated from the file as
+  its entries are walked (`streamIter`, never cached), `DB.GetStream` and
+  `table.Reader.FindStream` read a value as a stream, `Transaction.PutStream` and
+  `Writer.AppendStream` write one as a block of its own, compressed as it is
+  read, compaction copies big entries as streams, and the DB iterator reads a
+  value only when asked (`iterator.ValueStream`, `ValueSize`).
 - Compaction reply channels are buffered and never closed, fixing a data race
   that upstream hid with `recover()` (`TestDB_TransientError` under `-race`).
 - No `panic` in library code. Upstream's internal "BUG" checks now log,

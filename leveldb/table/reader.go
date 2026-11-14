@@ -565,6 +565,9 @@ type Reader struct {
 	// Decompressors are reused because each allocates tens of KiB. Blocks are
 	// read concurrently, so they are pooled per Reader rather than shared.
 	inflaters sync.Pool // *inflater
+	// bigBlocks maps the offset of each big data block read so far to its checked layout
+	// (bigBlock), so it is checked and measured once (stream.go).
+	bigBlocks sync.Map
 }
 
 // inflater holds reusable state for decoding Bedrock's zlib block types.
@@ -574,7 +577,8 @@ type inflater struct {
 	zlib  io.ReadCloser // zlib with header; implements zlib.Resetter
 }
 
-// inflateGuessUpTo is the biggest compressed block inflate gives four times its size.
+// inflateGuessUpTo is the biggest compressed block inflate guesses the size of; a bigger
+// one is counted first.
 const inflateGuessUpTo = 256 << 10
 
 // inflate decompresses one block of the given type into a buffer from the
@@ -585,42 +589,15 @@ func (r *Reader) inflate(src []byte, blockType byte) ([]byte, error) {
 		inf = new(inflater)
 	}
 	defer r.inflaters.Put(inf)
-	inf.src.Reset(src)
-
-	var rd io.Reader
-	switch blockType {
-	case blockTypeZlibRawCompression:
-		if inf.flate == nil {
-			inf.flate = flate.NewReader(&inf.src)
-		} else if rs, ok := inf.flate.(flate.Resetter); !ok {
-			return nil, errors.New("flate reader cannot be reset")
-		} else if err := rs.Reset(&inf.src, nil); err != nil {
-			return nil, err
-		}
-		rd = inf.flate
-	default: // blockTypeZlibCompression
-		if inf.zlib == nil {
-			zr, err := zlib.NewReader(&inf.src)
-			if err != nil {
-				return nil, err
-			}
-			inf.zlib = zr
-		} else if rs, ok := inf.zlib.(zlib.Resetter); !ok {
-			return nil, errors.New("zlib reader cannot be reset")
-		} else if err := rs.Reset(&inf.src, nil); err != nil {
-			return nil, err
-		}
-		rd = inf.zlib
+	rd, err := inf.reset(src, blockType)
+	if err != nil {
+		return nil, err
 	}
-
-	// Chunk data usually compresses 3-10x; start there and grow if needed. A big
-	// block starts at twice its size and grows by append's steps instead: four times
-	// a block of hundreds of megabytes is gigabytes never used.
-	guess := len(src) * 4
 	if len(src) > inflateGuessUpTo {
-		guess = len(src) * 2
+		return inf.inflateExact(src, blockType, rd)
 	}
-	dst := r.bpool.Get(guess)[:0]
+	// Chunk data usually compresses 3-10x; start there and grow if needed.
+	dst := r.bpool.Get(len(src) * 4)[:0]
 	for {
 		if len(dst) == cap(dst) {
 			dst = append(dst, 0)[:len(dst)]
@@ -633,6 +610,74 @@ func (r *Reader) inflate(src []byte, blockType byte) ([]byte, error) {
 		if err != nil {
 			r.bpool.Put(dst)
 			return nil, err
+		}
+	}
+}
+
+// inflateExact inflates a big block twice, first only to count its size, so its buffer is
+// exactly that: guessing and growing a block of hundreds of megabytes leaves as much again
+// unused, and as much more garbage. It is never pooled.
+func (inf *inflater) inflateExact(src []byte, blockType byte, rd io.Reader) ([]byte, error) {
+	size, err := inflatedSize(rd)
+	if err != nil {
+		return nil, err
+	}
+	if rd, err = inf.reset(src, blockType); err != nil {
+		return nil, err
+	}
+	dst := make([]byte, size)
+	if _, err := io.ReadFull(rd, dst); err != nil {
+		return nil, err
+	}
+	return dst, nil
+}
+
+// reset points the inflater at src and returns the reader for its block type.
+func (inf *inflater) reset(src []byte, blockType byte) (io.Reader, error) {
+	inf.src.Reset(src)
+	return inf.resetReader(&inf.src, blockType)
+}
+
+// resetReader points the inflater at the compressed stream src, which should be an
+// io.ByteReader so the inflater reads no further than the block.
+func (inf *inflater) resetReader(src io.Reader, blockType byte) (io.Reader, error) {
+	if blockType == blockTypeZlibRawCompression {
+		if inf.flate == nil {
+			inf.flate = flate.NewReader(src)
+		} else if rs, ok := inf.flate.(flate.Resetter); !ok {
+			return nil, errors.New("flate reader cannot be reset")
+		} else if err := rs.Reset(src, nil); err != nil {
+			return nil, err
+		}
+		return inf.flate, nil
+	}
+	if inf.zlib == nil {
+		zr, err := zlib.NewReader(src)
+		if err != nil {
+			return nil, err
+		}
+		inf.zlib = zr
+	} else if rs, ok := inf.zlib.(zlib.Resetter); !ok {
+		return nil, errors.New("zlib reader cannot be reset")
+	} else if err := rs.Reset(src, nil); err != nil {
+		return nil, err
+	}
+	return inf.zlib, nil
+}
+
+// inflatedSize reads rd to its end into a small scratch buffer and returns how many bytes
+// it gave.
+func inflatedSize(rd io.Reader) (int64, error) {
+	var scratch [32 << 10]byte
+	var n int64
+	for {
+		m, err := rd.Read(scratch[:])
+		n += int64(m)
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return 0, err
 		}
 	}
 }
@@ -880,6 +925,11 @@ func (r *Reader) newBlockIter(b *block, bReleaser util.Releaser, slice *util.Ran
 }
 
 func (r *Reader) getDataIter(dataBH blockHandle, slice *util.Range, verifyChecksum, fillCache bool) iterator.Iterator {
+	if dataBH.length >= bigBlockMin {
+		if it := r.newStreamIter(dataBH, slice); it != nil {
+			return it
+		}
+	}
 	b, rel, err := r.readBlockCached(dataBH, verifyChecksum, fillCache)
 	if err != nil {
 		return iterator.NewEmptyIterator(err)
@@ -1014,7 +1064,10 @@ func (r *Reader) find(key []byte, filtered bool, ro *opt.ReadOptions, noValue bo
 	// Key doesn't use block buffer, no need to copy the buffer.
 	rkey = data.Key()
 	if !noValue {
-		if r.bpool == nil {
+		if _, big := data.(*streamIter); big {
+			// A big block's value is read into a buffer of its own: no copy needed.
+			value = data.Value()
+		} else if r.bpool == nil {
 			value = data.Value()
 		} else {
 			// Value does use block buffer, and since the buffer will be

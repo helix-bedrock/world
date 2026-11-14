@@ -457,3 +457,110 @@ func NewWriter(f io.Writer, o *opt.Options, pool *util.BufferPool) *Writer {
 	}
 	return w
 }
+
+// AppendStream appends key with a value of size bytes read from value, written as a block of
+// its own and compressed as it is read, so a value of any size is never held whole (Helix;
+// see stream.go). Snappy cannot be written as a stream: the value is read whole then.
+func (w *Writer) AppendStream(key []byte, size int64, value io.Reader) error {
+	if w.err != nil {
+		return w.err
+	}
+	if w.compression == opt.SnappyCompression {
+		v := make([]byte, size)
+		if _, err := io.ReadFull(value, v); err != nil {
+			return fmt.Errorf("leveldb/table: read value: %w", err)
+		}
+		return w.Append(key, v)
+	}
+	if w.nEntries > 0 && w.cmp.Compare(w.dataBlock.prevKey, key) >= 0 {
+		w.err = fmt.Errorf("leveldb/table: Writer: keys are not in increasing order: %q, %q", w.dataBlock.prevKey, key)
+		return w.err
+	}
+	if w.dataBlock.nEntries > 0 {
+		if err := w.finishBlock(); err != nil {
+			w.err = err
+			return err
+		}
+	}
+	if err := w.flushPendingBH(key); err != nil {
+		return err
+	}
+	n, err := w.writeStreamBlock(key, size, value)
+	if err != nil {
+		w.err = err
+		return err
+	}
+	w.pendingBH = blockHandle{w.offset, uint64(n)}
+	w.offset += uint64(n) + blockTrailerLen
+	w.dataBlock.prevKey = append(w.dataBlock.prevKey[:0], key...)
+	w.filterBlock.add(key)
+	w.filterBlock.flush(w.offset)
+	w.nEntries++
+	return nil
+}
+
+// writeStreamBlock writes a block holding the one entry and its trailer, and returns the
+// block's stored size without the trailer.
+func (w *Writer) writeStreamBlock(key []byte, size int64, value io.Reader) (int64, error) {
+	cw := &crcCountWriter{w: w.writer}
+	var out io.Writer = cw
+	blockType := byte(blockTypeNoCompression)
+	if w.compression == opt.FlateCompression {
+		blockType = blockTypeZlibRawCompression
+		if w.flateWriter == nil {
+			fw, err := flate.NewWriter(cw, flateLevel)
+			if err != nil {
+				return 0, fmt.Errorf("leveldb/table: create flate writer: %w", err)
+			}
+			w.flateWriter = fw
+		} else {
+			w.flateWriter.Reset(cw)
+		}
+		out = w.flateWriter
+	}
+	var head [3 * binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(head[:], 0)
+	n += binary.PutUvarint(head[n:], uint64(len(key)))
+	n += binary.PutUvarint(head[n:], uint64(size))
+	if _, err := out.Write(head[:n]); err != nil {
+		return 0, err
+	}
+	if _, err := out.Write(key); err != nil {
+		return 0, err
+	}
+	if m, err := io.CopyN(out, value, size); err != nil {
+		return 0, fmt.Errorf("leveldb/table: value gave %d of %d bytes: %w", m, size, err)
+	}
+	// One restart point, at the entry.
+	var restarts [8]byte
+	binary.LittleEndian.PutUint32(restarts[4:], 1)
+	if _, err := out.Write(restarts[:]); err != nil {
+		return 0, err
+	}
+	if out != io.Writer(cw) {
+		if err := w.flateWriter.Close(); err != nil {
+			return 0, fmt.Errorf("leveldb/table: flate flush: %w", err)
+		}
+	}
+	var trailer [blockTrailerLen]byte
+	trailer[0] = blockType
+	binary.LittleEndian.PutUint32(trailer[1:], cw.crc.Update(trailer[:1]).Value())
+	if _, err := w.writer.Write(trailer[:]); err != nil {
+		return 0, err
+	}
+	return cw.n, nil
+}
+
+// crcCountWriter computes the block checksum and size of what it writes.
+type crcCountWriter struct {
+	w   io.Writer
+	crc util.CRC
+	n   int64
+}
+
+func (c *crcCountWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.crc = c.crc.Update(p[:n])
+	c.n += int64(n)
+	return n, err
+}

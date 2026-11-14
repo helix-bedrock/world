@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -194,7 +195,7 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 		// Not all chunks need to have entities, so an ErrNotFound is fine here.
 		return nil, fmt.Errorf("read entities: %w", err)
 	}
-	col.BlockEntities, err = db.blockEntities(rd, k)
+	col.BlockEntities, err = db.blockEntities(k)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		// Same as with entities, an ErrNotFound is fine here.
 		return nil, fmt.Errorf("read block entities: %w", err)
@@ -359,14 +360,22 @@ func (db *DB) entitiesOld(rd *chunkReader, k dbKey) ([]chunk.Entity, error) {
 	return entities, nil
 }
 
-func (db *DB) blockEntities(rd *chunkReader, k dbKey) ([]chunk.BlockEntity, error) {
+func (db *DB) blockEntities(k dbKey) ([]chunk.BlockEntity, error) {
 	var blockEntities []chunk.BlockEntity
-
-	data, err := rd.get(k.Sum(keyBlockEntities))
+	if db.conf.SkipBlockEntities {
+		return nil, nil
+	}
+	rc, _, err := db.blockEntityStream(k)
 	if err != nil {
 		return blockEntities, err
 	}
-
+	data, err := io.ReadAll(rc)
+	if cerr := rc.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return blockEntities, fmt.Errorf("read: %w", err)
+	}
 	buf := bytes.NewBuffer(data)
 	dec := nbt.NewDecoderWithEncoding(buf, nbt.LittleEndian)
 
@@ -456,7 +465,9 @@ func (db *DB) storeColumn(k dbKey, col *chunk.Column) error {
 	db.storeExtraTags(t, k, col.Extra)
 	db.storeEntities(t, k, col.Entities)
 	if !col.KeepBlockEntities {
-		db.storeBlockEntities(t, k, col.BlockEntities)
+		if err := db.storeBlockEntities(t, k, col.BlockEntities, col.KeepBlockEntitiesAt); err != nil {
+			return fmt.Errorf("block entities: %w", err)
+		}
 	}
 	db.storeScheduledUpdates(t, k, keyPendingScheduledTicks, col.Tick, col.ScheduledBlocks)
 	db.storeScheduledUpdates(t, k, keyRandomTicks, col.RandomTick, col.RandomTicks)
@@ -549,25 +560,6 @@ func (db *DB) storeEntities(t *txn, k dbKey, entities []chunk.Entity) {
 	db.owners.mu.Unlock()
 	t.Put(idsKey, ids)
 	t.Put(k.Sum(keyActorDigestVersion), []byte{0})
-}
-
-// storeBlockEntities writes the chunk's block entities, or deletes the key
-// when there are none, as BDS does.
-func (db *DB) storeBlockEntities(t *txn, k dbKey, blockEntities []chunk.BlockEntity) {
-	if len(blockEntities) == 0 {
-		t.Delete(k.Sum(keyBlockEntities))
-		return
-	}
-
-	buf := bytes.NewBuffer(nil)
-	enc := nbt.NewEncoderWithEncoding(buf, nbt.LittleEndian)
-	for _, b := range blockEntities {
-		b.Data["x"], b.Data["y"], b.Data["z"] = int32(b.Pos[0]), int32(b.Pos[1]), int32(b.Pos[2]) //nolint:gosec // block coordinates fit in int32
-		if err := enc.Encode(b.Data); err != nil {
-			db.conf.Log.Error("store block entities: encode nbt: " + err.Error())
-		}
-	}
-	t.Put(k.Sum(keyBlockEntities), buf.Bytes())
 }
 
 // storeScheduledUpdates writes a tick queue, or deletes it when empty, as

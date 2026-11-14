@@ -1,8 +1,10 @@
 package mcdb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -13,10 +15,36 @@ func DefaultFlushInterval() time.Duration {
 	return 5 * time.Second
 }
 
-// pendingValue is a buffered Put, or a Delete if deleted is set.
+// pendingValue is a buffered Put, or a Delete if deleted is set. A Put of a big value put
+// together as it is read has stream set instead of data (blockentities.go).
 type pendingValue struct {
 	data    []byte
+	stream  *streamValue
 	deleted bool
+}
+
+// open reads the value as a stream, with its size.
+func (v pendingValue) open() (io.ReadCloser, int64, error) {
+	if v.deleted {
+		return nil, 0, ErrNotFound
+	}
+	if v.stream != nil {
+		return v.stream.open()
+	}
+	return io.NopCloser(bytes.NewReader(v.data)), int64(len(v.data)), nil
+}
+
+// bytes returns the value whole, reading a stream into memory.
+func (v pendingValue) bytes() ([]byte, error) {
+	if v.stream == nil {
+		return v.data, nil
+	}
+	rc, _, err := v.stream.open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
 // writeBuffer collects writes, like BDS's pending batch, and flushes them as
@@ -50,6 +78,12 @@ func (t *txn) Put(key, value []byte) {
 	t.vals = append(t.vals, pendingValue{data: value})
 }
 
+// PutStream puts a value read as a stream when flushed.
+func (t *txn) PutStream(key []byte, s *streamValue) {
+	t.keys = append(t.keys, key)
+	t.vals = append(t.vals, pendingValue{stream: s})
+}
+
 func (t *txn) Delete(key []byte) {
 	t.keys = append(t.keys, key)
 	t.vals = append(t.vals, pendingValue{deleted: true})
@@ -77,7 +111,7 @@ func (w *writeBuffer) get(key []byte) ([]byte, error) {
 		if v.deleted {
 			return nil, ErrNotFound
 		}
-		return v.data, nil
+		return v.bytes()
 	}
 	return w.kv.Get(key)
 }
@@ -123,7 +157,11 @@ func (w *writeBuffer) flush(extra *txn) error {
 
 	writes := make([]KVWrite, 0, len(w.flushing))
 	for k, v := range w.flushing {
-		writes = append(writes, KVWrite{Key: []byte(k), Value: v.data, Delete: v.deleted})
+		wr := KVWrite{Key: []byte(k), Value: v.data, Delete: v.deleted}
+		if v.stream != nil {
+			wr.Stream, wr.Size = v.stream.open, v.stream.size
+		}
+		writes = append(writes, wr)
 	}
 	err := w.kv.Write(writes)
 

@@ -9,6 +9,7 @@ package leveldb
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"sort"
 	"sync/atomic"
 
@@ -406,6 +407,37 @@ func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 	return
 }
 
+// findStream is find with the value as a stream, which keeps the table open until closed.
+func (t *tOps) findStream(f *tFile, key []byte, ro *opt.ReadOptions) (rkey []byte, value io.ReadCloser, size int64, err error) {
+	ch, err := t.open(f)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	tr, ok := ch.Value().(*table.Reader)
+	if !ok {
+		ch.Release()
+		return nil, nil, 0, fmt.Errorf("leveldb: table cache holds no table reader")
+	}
+	rkey, value, size, err = tr.FindStream(key, true, ro)
+	if err != nil {
+		ch.Release()
+		return nil, nil, 0, err
+	}
+	return rkey, &releaseCloser{ReadCloser: value, release: ch.Release}, size, nil
+}
+
+// releaseCloser runs release after closing its reader.
+type releaseCloser struct {
+	io.ReadCloser
+	release func()
+}
+
+func (c *releaseCloser) Close() error {
+	err := c.ReadCloser.Close()
+	c.release()
+	return err
+}
+
 // Opens table. It returns a cache handle, which should
 // be released after use.
 func (t *tOps) open(f *tFile) (ch *cache.Handle, err error) {
@@ -547,6 +579,15 @@ type tWriter struct {
 }
 
 // Append key/value pair to the table.
+// appendStream appends a value of size bytes read from value, never held whole.
+func (w *tWriter) appendStream(key []byte, size int64, value io.Reader) error {
+	if w.first == nil {
+		w.first = append([]byte(nil), key...)
+	}
+	w.last = append(w.last[:0], key...)
+	return w.tw.AppendStream(key, size, value)
+}
+
 func (w *tWriter) append(key, value []byte) error {
 	if w.first == nil {
 		w.first = append([]byte(nil), key...)

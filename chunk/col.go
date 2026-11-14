@@ -18,8 +18,12 @@ type Column struct {
 	// in which no block entity changed sets it, so a chunk of huge chests is not
 	// encoded and written again only because a mob or tick queue in it changed.
 	KeepBlockEntities bool
-	Tick              int64
-	ScheduledBlocks   []ScheduledBlockUpdate
+	// KeepBlockEntitiesAt are block entities whose stored compounds a store copies as
+	// they are, besides those in BlockEntities: ones the caller left on disk and never
+	// read back since they were stored.
+	KeepBlockEntitiesAt []cube.Pos
+	Tick                int64
+	ScheduledBlocks     []ScheduledBlockUpdate
 	// RandomTick and RandomTicks are the chunk's second tick queue, BDS's
 	// random ticking queue: its clock and the updates due on it. The clock
 	// is separate from Tick: BDS advances it by the random tick speed each
@@ -72,6 +76,10 @@ func DefaultFinalisation() Finalisation {
 type BlockEntity struct {
 	Pos  cube.Pos
 	Data map[string]any
+	// Raw, when set, is the block entity's compound as stored, not decoded, and Data is
+	// nil: a store writes it as it is, so a caller that never decoded a block entity
+	// (mcdb's EachBlockEntity) saves it unchanged. Never change it.
+	Raw []byte
 }
 
 // Entity is the saved NBT data of an entity with its unique ID.

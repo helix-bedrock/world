@@ -27,8 +27,9 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
 ## Layout
 
 - `leveldb`: goleveldb (syndtr `126854a`) plus open upstream PRs, Bedrock
-  compression types 2 (zlib) and 4 (raw deflate), and no panics. See
-  `CREDITS.md` for the full list.
+  compression types 2 (zlib) and 4 (raw deflate), no panics, and big values
+  streamed instead of held whole (`GetStream`, `Transaction.PutStream`,
+  `table/stream.go`). See `CREDITS.md` for the full list.
 - `chunk`: chunks, sub chunks, palettes and paletted storage; disk and network
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.
@@ -37,7 +38,10 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   chunk's keys are read with one prefix iterator, `chunkread.go`, so each
   LevelDB block is read once; loads of chunks over 1 MB share
   `Config.LoadBudget`, `loadgate.go`), the
-  5-second write buffer in `buffer.go`, chunk metadata in `meta.go`, height
+  5-second write buffer in `buffer.go`, block entities read and written one
+  compound at a time in `blockentities.go` (`EachBlockEntity`,
+  `LoadBlockEntity`, `Config.SkipBlockEntities`; a save keeping stored
+  compounds of a big value copies them as a stream), the chunk metadata in `meta.go`, height
   maps in `heightmap.go`, players in `player.go`, the `KV`/`WorldStore`/
   `PlayerStore` interfaces and plugin namespaces in `store.go`.
 - `mcdb/leveldat`: `level.dat` reading and writing.

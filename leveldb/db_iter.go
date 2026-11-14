@@ -7,6 +7,7 @@
 package leveldb
 
 import (
+	"io"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -117,8 +118,11 @@ type dbIter struct {
 	dir         dir
 	key         []byte
 	value       []byte
-	err         error
-	releaser    util.Releaser
+	// lazy means the value is read from iter, still at its entry, only when asked: going
+	// forward, a big value nobody asks for is never read (Helix, see db_stream.go).
+	lazy     bool
+	err      error
+	releaser util.Releaser
 }
 
 func (i *dbIter) sampleSeek() {
@@ -127,7 +131,11 @@ func (i *dbIter) sampleSeek() {
 	}
 
 	ikey := i.iter.Key()
-	i.samplingGap -= len(ikey) + len(i.iter.Value())
+	size, ok := iterator.ValueSize(i.iter)
+	if !ok {
+		size = int64(len(i.iter.Value()))
+	}
+	i.samplingGap -= len(ikey) + int(min(size, 1<<30))
 	for i.samplingGap < 0 {
 		i.samplingGap += i.db.iterSamplingRate()
 		i.db.sampleSeek(ikey)
@@ -214,7 +222,7 @@ func (i *dbIter) next() bool {
 				case keyTypeVal:
 					if i.dir == dirSOI || i.icmp.uCompare(ukey, i.key) > 0 {
 						i.key = append(i.key[:0], ukey...)
-						i.value = append(i.value[:0], i.iter.Value()...)
+						i.value, i.lazy = i.value[:0], true
 						i.dir = dirForward
 						return true
 					}
@@ -250,7 +258,7 @@ func (i *dbIter) Next() bool {
 }
 
 func (i *dbIter) prev() bool {
-	i.dir = dirBackward
+	i.dir, i.lazy = dirBackward, false
 	del := true
 	if i.iter.Valid() {
 		for {
@@ -326,7 +334,19 @@ func (i *dbIter) Value() []byte {
 	if i.err != nil || i.dir <= dirEOI {
 		return nil
 	}
+	if i.lazy && i.dir == dirForward {
+		return i.iter.Value()
+	}
 	return i.value
+}
+
+// ValueStream hands out a big value as a stream while going forward
+// (iterator.ValueStreamer).
+func (i *dbIter) ValueStream() (io.Reader, int64, bool) {
+	if i.err != nil || !i.lazy || i.dir != dirForward {
+		return nil, 0, false
+	}
+	return iterator.ValueStream(i.iter)
 }
 
 func (i *dbIter) Release() {
