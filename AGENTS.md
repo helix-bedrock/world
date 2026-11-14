@@ -30,6 +30,12 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   compression types 2 (zlib) and 4 (raw deflate), no panics, and big values
   streamed instead of held whole (`GetStream`, `Transaction.PutStream`,
   `table/stream.go`). See `CREDITS.md` for the full list.
+- `lsm`: Helix's own engine for the same files (replacing `leveldb` step by
+  step): log, manifest, tables with raw deflate blocks and LevelDB's bloom
+  filter, a pointer-free arena memtable, snapshot reads that never wait for
+  writes, big values streamed into tables of their own and copied as stored
+  by compaction, a small-block cache. Checked against `leveldb` both ways and
+  on BDS worlds (`TestBDSWorld`, `LSM_BDS_WORLD`).
 - `chunk`: chunks, sub chunks, palettes and paletted storage; disk and network
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.
