@@ -44,6 +44,11 @@ type Config struct {
 	// one batch. Zero means DefaultFlushInterval; negative means only Flush
 	// and Close write them.
 	FlushInterval time.Duration
+	// LoadBudget is about how many bytes chunks loading at the same time may take.
+	// Only chunks over a megabyte stored count, so a world of normal chunks never
+	// waits; a chunk bigger than the budget loads alone. Zero means
+	// DefaultLoadBudget; negative means no limit.
+	LoadBudget int64
 }
 
 // Open opens the world in dir, creating it if needed. If a level.dat is
@@ -120,6 +125,12 @@ func (conf Config) Open(dir string) (*DB, error) {
 	}
 	if conf.FlushInterval == 0 {
 		db.conf.FlushInterval = DefaultFlushInterval()
+	}
+	switch {
+	case conf.LoadBudget == 0:
+		db.gate = newLoadGate(DefaultLoadBudget)
+	case conf.LoadBudget > 0:
+		db.gate = newLoadGate(conf.LoadBudget)
 	}
 	db.stop, db.stopped = make(chan struct{}), make(chan struct{})
 	go db.flushLoop()

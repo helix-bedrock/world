@@ -51,6 +51,8 @@ type DB struct {
 	owners entityOwners
 
 	stop, stopped chan struct{}
+	// gate keeps big chunk loads under Config.LoadBudget; nil for no limit.
+	gate *loadGate
 }
 
 // entityOwners maps entity IDs to the chunk (its digp key) that last stored them. Runs: any
@@ -143,20 +145,26 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	var cdata chunk.SerialisedData
 	col := new(chunk.Column)
 
-	ver, err := db.version(k)
+	defer db.leaveLoad(db.enterLoad(k))
+	rd, err := db.readChunk(k)
+	if err != nil {
+		return nil, fmt.Errorf("read chunk keys: %w", err)
+	}
+	defer rd.release()
+	ver, err := db.version(rd, k)
 	if err != nil {
 		return nil, fmt.Errorf("read version: %w", err)
 	}
 	if ver != chunkVersion {
 		db.conf.Log.Debug("column: unsupported chunk version, trying to load anyway", "X", k.pos[0], "Z", k.pos[1], "dimension", fmt.Sprint(k.dim), "ver", ver)
 	}
-	cdata.Biomes, col.HeightMap, err = db.biomes(k)
+	cdata.Biomes, col.HeightMap, err = db.biomes(rd, k)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		// Some chunks still use 2D chunk data and might not have this field, in
 		// which case we can just move on.
 		return nil, fmt.Errorf("read biomes: %w", err)
 	}
-	cdata.SubChunks, err = db.subChunks(k)
+	cdata.SubChunks, err = db.subChunks(rd, k)
 	if err != nil {
 		return nil, fmt.Errorf("read sub chunks: %w", err)
 	}
@@ -165,49 +173,49 @@ func (db *DB) column(k dbKey) (*chunk.Column, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode chunk data: %w", err)
 	}
-	legacy, err := db.buf.has(k.Sum(keyLegacyStates))
+	legacy, err := rd.has(k.Sum(keyLegacyStates))
 	if err != nil {
 		return nil, fmt.Errorf("read legacy states: %w", err)
 	}
 	if legacy {
 		col.Chunk.MarkLegacyStates()
 	}
-	if col.Finalisation, err = db.finalisation(k); err != nil {
+	if col.Finalisation, err = db.finalisation(rd, k); err != nil {
 		return nil, fmt.Errorf("read finalisation: %w", err)
 	}
-	if col.MetaDataHash, col.BlendingData, err = db.metaData(k); err != nil {
+	if col.MetaDataHash, col.BlendingData, err = db.metaData(rd, k); err != nil {
 		return nil, fmt.Errorf("read metadata: %w", err)
 	}
-	if col.Extra, err = db.extraTags(k); err != nil {
+	if col.Extra, err = db.extraTags(rd, k); err != nil {
 		return nil, fmt.Errorf("read chunk keys: %w", err)
 	}
-	col.Entities, err = db.entities(k, ver)
+	col.Entities, err = db.entities(rd, k, ver)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		// Not all chunks need to have entities, so an ErrNotFound is fine here.
 		return nil, fmt.Errorf("read entities: %w", err)
 	}
-	col.BlockEntities, err = db.blockEntities(k)
+	col.BlockEntities, err = db.blockEntities(rd, k)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		// Same as with entities, an ErrNotFound is fine here.
 		return nil, fmt.Errorf("read block entities: %w", err)
 	}
-	col.ScheduledBlocks, col.Tick, err = db.scheduledUpdates(k, keyPendingScheduledTicks)
+	col.ScheduledBlocks, col.Tick, err = db.scheduledUpdates(rd, k, keyPendingScheduledTicks)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		return nil, fmt.Errorf("read scheduled updates: %w", err)
 	}
-	col.RandomTicks, col.RandomTick, err = db.scheduledUpdates(k, keyRandomTicks)
+	col.RandomTicks, col.RandomTick, err = db.scheduledUpdates(rd, k, keyRandomTicks)
 	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
 		return nil, fmt.Errorf("read random ticks: %w", err)
 	}
 	return col, nil
 }
 
-func (db *DB) version(k dbKey) (byte, error) {
-	p, err := db.buf.get(k.Sum(keyVersion))
+func (db *DB) version(rd *chunkReader, k dbKey) (byte, error) {
+	p, err := rd.get(k.Sum(keyVersion))
 	if errors.Is(err, leveldb.ErrNotFound) {
 		// Although the version at `keyVersion` may not be found, there is
 		// another `keyVersionOld` where the version may be found.
-		if p, err = db.buf.get(k.Sum(keyVersionOld)); err != nil {
+		if p, err = rd.get(k.Sum(keyVersionOld)); err != nil {
 			return 0, err
 		}
 	}
@@ -222,8 +230,8 @@ func (db *DB) version(k dbKey) (byte, error) {
 
 // finalisation reads keyFinalisation. Like BDS, a chunk without one is
 // finished.
-func (db *DB) finalisation(k dbKey) (chunk.Finalisation, error) {
-	p, err := db.buf.get(k.Sum(keyFinalisation))
+func (db *DB) finalisation(rd *chunkReader, k dbKey) (chunk.Finalisation, error) {
+	p, err := rd.get(k.Sum(keyFinalisation))
 	if errors.Is(err, leveldb.ErrNotFound) {
 		return chunk.DefaultFinalisation(), nil
 	}
@@ -238,9 +246,9 @@ func (db *DB) finalisation(k dbKey) (chunk.Finalisation, error) {
 
 // metaData reads keyMetaDataHash and keyBlendingData. Missing keys give
 // zero values: BDS infers metadata for such chunks.
-func (db *DB) metaData(k dbKey) (uint64, []byte, error) {
+func (db *DB) metaData(rd *chunkReader, k dbKey) (uint64, []byte, error) {
 	var h uint64
-	p, err := db.buf.get(k.Sum(keyMetaDataHash))
+	p, err := rd.get(k.Sum(keyMetaDataHash))
 	if err == nil {
 		if len(p) != 8 {
 			return 0, nil, fmt.Errorf("expected 8 hash bytes, got %v", len(p))
@@ -249,7 +257,7 @@ func (db *DB) metaData(k dbKey) (uint64, []byte, error) {
 	} else if !errors.Is(err, leveldb.ErrNotFound) {
 		return 0, nil, err
 	}
-	blend, err := db.buf.get(k.Sum(keyBlendingData))
+	blend, err := rd.get(k.Sum(keyBlendingData))
 	if errors.Is(err, leveldb.ErrNotFound) {
 		return h, nil, nil
 	}
@@ -259,8 +267,8 @@ func (db *DB) metaData(k dbKey) (uint64, []byte, error) {
 	return h, slices.Clone(blend), nil
 }
 
-func (db *DB) biomes(k dbKey) ([]byte, []int16, error) {
-	biomes, err := db.buf.get(k.Sum(key3DData))
+func (db *DB) biomes(rd *chunkReader, k dbKey) ([]byte, []int16, error) {
+	biomes, err := rd.get(k.Sum(key3DData))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -271,14 +279,14 @@ func (db *DB) biomes(k dbKey) ([]byte, []int16, error) {
 	return biomes[heightMapSize:], decodeHeightMap(biomes), nil
 }
 
-func (db *DB) subChunks(k dbKey) ([][]byte, error) {
+func (db *DB) subChunks(rd *chunkReader, k dbKey) ([][]byte, error) {
 	r, _ := k.dim.Range()
 	sub := make([][]byte, (r.Height()>>4)+1)
 
 	var err error
 	for i := range sub {
 		y := uint8(i + (r[0] >> 4)) //nolint:gosec // sub chunk Y is stored as a raw byte
-		sub[i], err = db.buf.get(k.Sum(keySubChunkData, y))
+		sub[i], err = rd.get(k.Sum(keySubChunkData, y))
 		if errors.Is(err, leveldb.ErrNotFound) {
 			// No sub chunk present at this Y level. We skip this one and move
 			// to the next, which might still be present.
@@ -290,13 +298,13 @@ func (db *DB) subChunks(k dbKey) ([][]byte, error) {
 	return sub, nil
 }
 
-func (db *DB) entities(k dbKey, ver byte) ([]chunk.Entity, error) {
+func (db *DB) entities(rd *chunkReader, k dbKey, ver byte) ([]chunk.Entity, error) {
 	// https://learn.microsoft.com/en-us/minecraft/creator/documents/actorstorage
 	ids, err := db.buf.get(append([]byte(keyEntityIdentifiers), index(k.pos, k.dim)...))
 	if err != nil {
 		if errors.Is(err, leveldb.ErrNotFound) && ver < legacyEntitiesBelow {
 			// BDS only migrates the old entity key for old chunks.
-			return db.entitiesOld(k)
+			return db.entitiesOld(rd, k)
 		}
 		return nil, err
 	}
@@ -326,8 +334,8 @@ func (db *DB) entities(k dbKey, ver byte) ([]chunk.Entity, error) {
 	return entities, nil
 }
 
-func (db *DB) entitiesOld(k dbKey) ([]chunk.Entity, error) {
-	data, err := db.buf.get(k.Sum(keyEntitiesOld))
+func (db *DB) entitiesOld(rd *chunkReader, k dbKey) ([]chunk.Entity, error) {
+	data, err := rd.get(k.Sum(keyEntitiesOld))
 	if err != nil {
 		return nil, err
 	}
@@ -351,10 +359,10 @@ func (db *DB) entitiesOld(k dbKey) ([]chunk.Entity, error) {
 	return entities, nil
 }
 
-func (db *DB) blockEntities(k dbKey) ([]chunk.BlockEntity, error) {
+func (db *DB) blockEntities(rd *chunkReader, k dbKey) ([]chunk.BlockEntity, error) {
 	var blockEntities []chunk.BlockEntity
 
-	data, err := db.buf.get(k.Sum(keyBlockEntities))
+	data, err := rd.get(k.Sum(keyBlockEntities))
 	if err != nil {
 		return blockEntities, err
 	}
@@ -375,8 +383,8 @@ func (db *DB) blockEntities(k dbKey) ([]chunk.BlockEntity, error) {
 
 // scheduledUpdates reads a tick queue, pending ticks or random ticks: both
 // are {currentTick, tickList}.
-func (db *DB) scheduledUpdates(k dbKey, tag byte) ([]chunk.ScheduledBlockUpdate, int64, error) {
-	data, err := db.buf.get(k.Sum(tag))
+func (db *DB) scheduledUpdates(rd *chunkReader, k dbKey, tag byte) ([]chunk.ScheduledBlockUpdate, int64, error) {
+	data, err := rd.get(k.Sum(tag))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -683,10 +691,10 @@ func blockPosFromNBT(data map[string]any) cube.Pos {
 
 // extraTags reads the chunk keys kept raw in Column.Extra. Nil if the chunk
 // has none.
-func (db *DB) extraTags(k dbKey) (map[byte][]byte, error) {
+func (db *DB) extraTags(rd *chunkReader, k dbKey) (map[byte][]byte, error) {
 	var extra map[byte][]byte
 	for _, tag := range extraChunkTags {
-		v, err := db.buf.get(k.Sum(tag))
+		v, err := rd.get(k.Sum(tag))
 		if errors.Is(err, leveldb.ErrNotFound) {
 			continue
 		}

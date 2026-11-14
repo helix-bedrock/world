@@ -60,9 +60,16 @@ func (p *BufferPool) Get(n int) []byte {
 	return make([]byte, n, p.baseline)
 }
 
+// maxPooled is the biggest buffer the pool keeps. Get hands a pooled buffer to any
+// smaller request, and a block read into it may sit in the block cache, which counts
+// the block's length, not the buffer's: one huge buffer (from a block of hundreds of
+// megabytes) reused for a few kilobytes pinned all of it, and the cache grew to
+// gigabytes. Bigger buffers are left to the garbage collector.
+const maxPooled = 1 << 20
+
 // Put adds given buffer to the pool.
 func (p *BufferPool) Put(b []byte) {
-	if p == nil {
+	if p == nil || cap(b) > maxPooled {
 		return
 	}
 

@@ -24,8 +24,9 @@ type pendingValue struct {
 // it is stored. Safe for concurrent use.
 type writeBuffer struct {
 	kv KV
-	// flushMu lets one flush run at a time.
-	flushMu sync.Mutex
+	// flushMu lets one flush run at a time, and none while a chunk is read
+	// (chunkReader holds it for reading).
+	flushMu sync.RWMutex
 	mu      sync.Mutex
 	pending map[string]pendingValue
 	// flushing holds the batch being written, still visible to reads until
@@ -79,6 +80,17 @@ func (w *writeBuffer) get(key []byte) ([]byte, error) {
 		return v.data, nil
 	}
 	return w.kv.Get(key)
+}
+
+// buffered returns the write of key waiting in the buffer, if there is one.
+func (w *writeBuffer) buffered(key []byte) (pendingValue, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	v, ok := w.pending[string(key)]
+	if !ok {
+		v, ok = w.flushing[string(key)]
+	}
+	return v, ok
 }
 
 // has reports whether key exists, buffered or on disk.

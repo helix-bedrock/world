@@ -33,7 +33,10 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.
 - `mcdb`: the world provider. Chunk tags and actor keys in `keys.go`, level
-  keys in `levelkeys.go`, chunk/entity/block entity storage in `db.go`, the
+  keys in `levelkeys.go`, chunk/entity/block entity storage in `db.go` (a
+  chunk's keys are read with one prefix iterator, `chunkread.go`, so each
+  LevelDB block is read once; loads of chunks over 1 MB share
+  `Config.LoadBudget`, `loadgate.go`), the
   5-second write buffer in `buffer.go`, chunk metadata in `meta.go`, height
   maps in `heightmap.go`, players in `player.go`, the `KV`/`WorldStore`/
   `PlayerStore` interfaces and plugin namespaces in `store.go`.

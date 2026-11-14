@@ -574,6 +574,9 @@ type inflater struct {
 	zlib  io.ReadCloser // zlib with header; implements zlib.Resetter
 }
 
+// inflateGuessUpTo is the biggest compressed block inflate gives four times its size.
+const inflateGuessUpTo = 256 << 10
+
 // inflate decompresses one block of the given type into a buffer from the
 // pool. The decompressed size is not stored, so the buffer grows as needed.
 func (r *Reader) inflate(src []byte, blockType byte) ([]byte, error) {
@@ -610,8 +613,14 @@ func (r *Reader) inflate(src []byte, blockType byte) ([]byte, error) {
 		rd = inf.zlib
 	}
 
-	// Chunk data usually compresses 3-10x; start there and grow if needed.
-	dst := r.bpool.Get(len(src) * 4)[:0]
+	// Chunk data usually compresses 3-10x; start there and grow if needed. A big
+	// block starts at twice its size and grows by append's steps instead: four times
+	// a block of hundreds of megabytes is gigabytes never used.
+	guess := len(src) * 4
+	if len(src) > inflateGuessUpTo {
+		guess = len(src) * 2
+	}
+	dst := r.bpool.Get(guess)[:0]
 	for {
 		if len(dst) == cap(dst) {
 			dst = append(dst, 0)[:len(dst)]
