@@ -22,18 +22,18 @@ type fileMeta struct {
 
 // versionEdit is one manifest record (LevelDB db/version_edit.cc).
 type versionEdit struct {
-	comparator   string
-	logNum       uint64
-	prevLogNum   uint64
-	nextFile     uint64
-	lastSeq      uint64
-	hasLogNum    bool
-	hasPrevLog   bool
-	hasNextFile  bool
-	hasLastSeq   bool
-	compactPtrs  []levelKey
-	deleted      []levelFile
-	added        []levelMeta
+	comparator  string
+	logNum      uint64
+	prevLogNum  uint64
+	nextFile    uint64
+	lastSeq     uint64
+	hasLogNum   bool
+	hasPrevLog  bool
+	hasNextFile bool
+	hasLastSeq  bool
+	compactPtrs []levelKey
+	deleted     []levelFile
+	added       []levelMeta
 }
 
 type levelKey struct {

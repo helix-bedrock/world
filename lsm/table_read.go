@@ -200,13 +200,13 @@ func (t *table) getStream(ikey []byte) (key []byte, small []byte, stream *valueS
 // valueStream reads the value of the one entry of a big block, inflating as it goes and
 // checking the block's checksum when the value has been read to its end.
 type valueStream struct {
-	t     *table
-	in    *inflater
-	crc   hash.Hash32
-	typ   byte
-	h     blockHandle
-	raw   *bufio.Reader
-	r     io.Reader // the decompressed block, positioned at the value
+	t       *table
+	in      *inflater
+	crc     hash.Hash32
+	typ     byte
+	h       blockHandle
+	raw     *bufio.Reader
+	r       io.Reader // the decompressed block, positioned at the value
 	key     []byte
 	size    int64
 	left    int64

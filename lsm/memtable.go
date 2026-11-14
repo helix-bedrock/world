@@ -72,7 +72,7 @@ func (m *memtable) add(seq uint64, k kind, ukey, value []byte) {
 		m.height = h
 	}
 	n := memNode{off: uint32(off), klen: uint32(klen), vlen: uint32(len(value)), height: uint8(h)} //nolint:gosec // memtables stay far under 4 GB
-	idx := uint32(len(m.nodes))                                                                     //nolint:gosec // as above
+	idx := uint32(len(m.nodes))                                                                    //nolint:gosec // as above
 	for i := range h {
 		n.next[i] = m.nodes[m.prev[i]].next[i]
 	}
