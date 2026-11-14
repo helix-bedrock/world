@@ -258,15 +258,23 @@ func payloadKey(pos ChunkPos, n uint32) [7]byte {
 // converter may commit the round while a huge chunk is being written: the
 // objects record itself is put by Close. One writer per Round at a time.
 type ObjectsWriter struct {
-	r        *Round
-	dim      Dimension
-	pos      ChunkPos
-	f        store.FileID
-	body     []byte
+	r    *Round
+	dim  Dimension
+	pos  ChunkPos
+	f    store.FileID
+	body []byte
+	// payloads is the payload count the record will give: one past the
+	// highest number in use.
 	payloads uint32
-	empty    bool
-	fields   []field
-	cuts     []field
+	// next is where the search for a free payload number starts; every
+	// number below it is kept or newly written.
+	next uint32
+	// kept marks the payload numbers of kept shells.
+	kept   []bool
+	nums   []uint32
+	empty  bool
+	fields []field
+	cuts   []field
 }
 
 // Objects starts writing the objects record of a chunk, replacing the one
@@ -277,7 +285,8 @@ func (r *Round) Objects(dim Dimension, pos ChunkPos) (*ObjectsWriter, error) {
 		return nil, err
 	}
 	ow := &r.ow
-	*ow = ObjectsWriter{r: r, dim: dim, pos: pos, f: f, body: ow.body[:0], empty: true, fields: ow.fields, cuts: ow.cuts}
+	*ow = ObjectsWriter{r: r, dim: dim, pos: pos, f: f, body: ow.body[:0], empty: true, fields: ow.fields, cuts: ow.cuts,
+		kept: ow.kept[:0], nums: ow.nums[:0]}
 	return ow, nil
 }
 
@@ -309,6 +318,47 @@ func (ow *ObjectsWriter) Entity(id, data []byte) error {
 	return ow.shell(secEntity, id, data)
 }
 
+// KeepBlockEntity adds a block entity shell decoded from the chunk's stored
+// objects record, with its payloads left on disk as they are: a save in which
+// a chest did not change neither reads nor writes its contents again. Kept
+// shells must come before any new block entity or entity.
+func (ow *ObjectsWriter) KeepBlockEntity(s Shell) error {
+	if ow.next > 0 {
+		return errors.New("hx: shell kept after new ones")
+	}
+	var err error
+	s.EachCut(func(_, _ int, payload uint32) {
+		if int(payload) >= len(ow.kept) {
+			ow.kept = append(ow.kept, make([]bool, int(payload)+1-len(ow.kept))...)
+		}
+		if ow.kept[payload] {
+			err = fmt.Errorf("hx: payload %d kept twice", payload)
+		}
+		ow.kept[payload] = true
+	})
+	if err != nil {
+		return err
+	}
+	ow.payloads = max(ow.payloads, uint32(len(ow.kept)))                                              //nolint:gosec // payload numbers are u32
+	ow.body = appendSection(ow.body, secBlockEntity, uvarintLen(uint64(s.n))+len(s.cuts)+len(s.Data)) //nolint:gosec // small
+	ow.body = binary.AppendUvarint(ow.body, uint64(s.n))                                              //nolint:gosec // small
+	ow.body = append(ow.body, s.cuts...)
+	ow.body = append(ow.body, s.Data...)
+	ow.empty = false
+	return nil
+}
+
+// allocPayload returns the lowest payload number neither kept nor written.
+func (ow *ObjectsWriter) allocPayload() uint32 {
+	n := ow.next
+	for int(n) < len(ow.kept) && ow.kept[n] {
+		n++
+	}
+	ow.next = n + 1
+	ow.payloads = max(ow.payloads, ow.next)
+	return n
+}
+
 // shell cuts compound and appends its section; prefix (an entity ID) comes
 // before the shell.
 func (ow *ObjectsWriter) shell(tag byte, prefix, compound []byte) error {
@@ -320,21 +370,24 @@ func (ow *ObjectsWriter) shell(tag byte, prefix, compound []byte) error {
 	} else {
 		ow.cuts = ow.cuts[:0]
 	}
+	ow.nums = ow.nums[:0]
+	for range ow.cuts {
+		ow.nums = append(ow.nums, ow.allocPayload())
+	}
 	n := len(prefix) + uvarintLen(uint64(len(ow.cuts))) + len(compound)
 	for i, c := range ow.cuts {
-		n += uvarintLen(uint64(c.start)) + uvarintLen(uint64(c.end-c.start)) + uvarintLen(uint64(ow.payloads)+uint64(i)) //nolint:gosec // small
+		n += uvarintLen(uint64(c.start)) + uvarintLen(uint64(c.end-c.start)) + uvarintLen(uint64(ow.nums[i])) //nolint:gosec // small
 		n -= c.end - c.start
 	}
 	ow.body = appendSection(ow.body, tag, n)
 	ow.body = append(ow.body, prefix...)
 	ow.body = binary.AppendUvarint(ow.body, uint64(len(ow.cuts)))
-	for _, c := range ow.cuts {
-		k := payloadKey(ow.pos, ow.payloads)
+	for i, c := range ow.cuts {
+		k := payloadKey(ow.pos, ow.nums[i])
 		ow.r.b.Put(ow.f, KindPayload, k[:], compound[c.start:c.end])
 		ow.body = binary.AppendUvarint(ow.body, uint64(c.start))       //nolint:gosec // offsets
 		ow.body = binary.AppendUvarint(ow.body, uint64(c.end-c.start)) //nolint:gosec // lengths
-		ow.body = binary.AppendUvarint(ow.body, uint64(ow.payloads))
-		ow.payloads++
+		ow.body = binary.AppendUvarint(ow.body, uint64(ow.nums[i]))
 	}
 	last := 0
 	for _, c := range ow.cuts {
@@ -347,14 +400,18 @@ func (ow *ObjectsWriter) shell(tag byte, prefix, compound []byte) error {
 }
 
 // Close puts the objects record, or deletes it if nothing was added, and
-// deletes payloads the old record had past the new count.
+// deletes the payloads of the old record that are neither kept nor written
+// again.
 func (ow *ObjectsWriter) Close() error {
 	r := ow.r
 	old, err := r.w.storedPayloads(ow.dim, ow.pos, &r.scratch)
 	if err != nil {
 		return err
 	}
-	for n := ow.payloads; n < old; n++ {
+	for n := ow.next; n < old; n++ {
+		if int(n) < len(ow.kept) && ow.kept[n] {
+			continue
+		}
 		k := payloadKey(ow.pos, n)
 		r.b.Delete(ow.f, k[:])
 	}

@@ -321,9 +321,9 @@ func (im *importer) entities(ow *hx.ObjectsWriter, id chunkID) (bool, error) {
 		if err := ow.Entity(aid, data); err != nil {
 			return false, err
 		}
-		im.prog.p.Entities++
 		im.prog.p.Bytes += int64(len(data))
 		if data != nil {
+			im.prog.p.Entities++
 			im.referenced = append(im.referenced, binary.BigEndian.Uint64(aid))
 		}
 		if err := im.maybeCommit(); err != nil {

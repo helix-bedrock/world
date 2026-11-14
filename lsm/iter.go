@@ -49,7 +49,7 @@ func (it *tableIter) loadBlock() bool {
 		return false
 	}
 	it.closeBig()
-	it.big = h.size >= it.t.bigBlock
+	it.big = h.size >= min(it.t.bigBlock, streamBlock)
 	if it.big {
 		return it.loadBig(h)
 	}
@@ -61,6 +61,13 @@ func (it *tableIter) loadBlock() bool {
 	it.data.reset(b)
 	return true
 }
+
+// streamBlock is the stored size from which an iterator streams a block entry by entry
+// instead of reading it whole, so compaction copies a value that sits alone in its
+// block as stored. Blocks are cut at 16 KB, so only a block holding a value well past
+// that is this big; a value of BigValue or more that compresses below BigValue still
+// gets here.
+const streamBlock = 64 << 10
 
 // loadBig opens a big block at its first entry.
 func (it *tableIter) loadBig(h blockHandle) bool {

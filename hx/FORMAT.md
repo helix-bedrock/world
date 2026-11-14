@@ -100,7 +100,11 @@ putting each payload back at its offset gives BDS's bytes unchanged.
 
 **Payload record** (kind 7): key = the chunk's 2-byte index in the region,
 part 3, payload number (big-endian u32); body = the cut field's bytes.
-Payloads are numbered from 0 per chunk; a save with fewer deletes the rest.
+Payloads are numbered from 0 per chunk; the count in the objects record is
+one past the highest number in use. A save may keep a block entity's shell
+as stored with its payload numbers (a chest that did not change is not
+rewritten); new shells take the free numbers, which may leave gaps, and the
+save deletes every old payload neither kept nor written again.
 
 ## Level keys and players
 

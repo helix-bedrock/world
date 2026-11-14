@@ -17,19 +17,27 @@ import (
 const streamAt = 1 << 20
 
 // Export converts the Helix world in hxDir into a new BDS world in bdsDir,
-// which must not hold a database. It reads one snapshot of the world, so it
-// may run while a server plays it: the export shows the newest round saved
-// when it began.
+// which must not hold a database. The world must not be open elsewhere; for
+// a world a server has open, use ExportWorld.
 func Export(hxDir, bdsDir string, opts Options) error {
 	opts = opts.withDefaults()
-	if _, err := os.Stat(filepath.Join(bdsDir, "db", "CURRENT")); err == nil {
-		return fmt.Errorf("convert: %s already holds a database", bdsDir)
-	}
 	w, err := hx.Open(hxDir, hx.Config{Store: opts.Store})
 	if err != nil {
 		return fmt.Errorf("convert: open Helix world: %w", err)
 	}
 	defer w.Close()
+	return ExportWorld(w, bdsDir, opts)
+}
+
+// ExportWorld converts an open Helix world into a new BDS world in bdsDir,
+// which must not hold a database. It reads one snapshot of the world, so it
+// may run while a server plays it: the export shows the newest round saved
+// when it began.
+func ExportWorld(w *hx.World, bdsDir string, opts Options) error {
+	opts = opts.withDefaults()
+	if _, err := os.Stat(filepath.Join(bdsDir, "db", "CURRENT")); err == nil {
+		return fmt.Errorf("convert: %s already holds a database", bdsDir)
+	}
 	snap, err := w.Snapshot()
 	if err != nil {
 		return fmt.Errorf("convert: %w", err)
@@ -40,7 +48,7 @@ func Export(hxDir, bdsDir string, opts Options) error {
 		return fmt.Errorf("convert: create BDS world: %w", err)
 	}
 	ex := &exporter{snap: snap, db: db, opts: opts, table: w.Blocks()}
-	err = ex.run(hxDir, bdsDir)
+	err = ex.run(w.Dir(), bdsDir)
 	if cerr := db.Close(); err == nil {
 		err = cerr
 	}

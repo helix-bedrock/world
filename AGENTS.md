@@ -35,7 +35,8 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   filter, a pointer-free arena memtable, a `ReadOnly` open that writes
   nothing (the converter reads BDS worlds with it), snapshot reads that never wait for
   writes, big values streamed into tables of their own and copied as stored
-  by compaction, a small-block cache. Checked against `leveldb` both ways and
+  by compaction (iterators stream blocks over 64 KB stored, so a value
+  alone in its block is copied without inflating it), a small-block cache. Checked against `leveldb` both ways and
   on BDS worlds (`TestBDSWorld`, `LSM_BDS_WORLD`).
 - `hx/store`: the record store under Helix's own world format (`.hx`, design
   in `.github/API_DESIGN.md` "World data redesign", bytes in `hx/FORMAT.md`):
@@ -66,7 +67,17 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   back must give BDS's bytes. Decoding a terrain record and a warm terrain
   read must stay at 0 allocations (`BenchmarkDecodeTerrain`,
   `BenchmarkLoadTerrain`).
-- `convert`: BDS world <-> Helix world, lossless (`Import`, `Export`). Every
+- `hxdb`: the provider engines run on: an `hx` world behind mcdb's
+  `WorldStore`, `PlayerStore` and `BlockEntityLoader`, so Helix uses the
+  same calls it used on LevelDB. Chunk columns are turned into hx's terrain
+  and objects records with BDS's chunk keys (version, metadata hash through
+  `mcdb.ChunkMetaData`, finalisation, blending, Extra), one save round
+  committed every 5 s or at 64 MB; a chunk or player stored again before its
+  round is committed commits that round first, level keys are read from the
+  round. `KeepBlockEntities` keeps shells and their payloads as stored
+  (`ObjectsWriter.KeepBlockEntity`). `TestColumnRoundTrip`.
+- `convert`: BDS world <-> Helix world, lossless (`Import`, `Export`;
+  `ExportWorld` exports a world a server has open, from a snapshot). Every
   key goes somewhere; sub chunks that would not re-encode to the same bytes
   stay raw. `TestRoundTrip` covers every key family; `TestBDSWorld`
   (`HX_BDS_WORLD` = a BDS world folder) round-trips a real world and

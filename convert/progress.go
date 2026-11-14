@@ -30,7 +30,8 @@ type Progress struct {
 	// Keys counts BDS keys read (Import) or written (Export); Bytes their
 	// values' bytes.
 	Keys, Bytes int64
-	// Chunks counts chunks done; BlockEntities and Entities what they held.
+	// Chunks counts chunks done; BlockEntities and Entities what they held
+	// (entity IDs a digp list names with no record are not counted).
 	Chunks, BlockEntities, Entities int64
 	// Dim and Pos are the chunk being converted, so a chunk that takes long
 	// (a chest bomb) shows which one it is.
