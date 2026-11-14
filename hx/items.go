@@ -32,9 +32,20 @@ const (
 	ItemsRefSum   = "sum"
 	ItemsRefSize  = "size"
 	ItemsRefShown = "shown"
-	// itemsListTag is the tag a reference stands for.
+	// PagesRefTag is the same for a book's "pages" list: the record holds the pages.
+	PagesRefTag = "helix:pages"
+	// itemsListTag and pagesListTag are the tags references stand for.
 	itemsListTag = "Items"
+	pagesListTag = "pages"
 )
+
+// refTags are the reference tags and the list tags each stands for.
+var refTags = [...][2]string{{ItemsRefTag, itemsListTag}, {PagesRefTag, pagesListTag}}
+
+// holdsRef reports whether b, NBT bytes, may hold a reference.
+func holdsRef(b []byte) bool {
+	return bytes.Contains(b, []byte(ItemsRefTag)) || bytes.Contains(b, []byte(PagesRefTag))
+}
 
 // ItemsSum is an item contents record's key: the SHA-256 of its bytes.
 type ItemsSum [32]byte
@@ -102,7 +113,7 @@ func NewItemsRef(sum ItemsSum, size int32, shown any) map[string]any {
 // in it replaced by the items it refers to, appended to dst: what BDS reads. A compound with
 // none is copied as it is, without decoding.
 func (v view) InlineItemsNBT(src, dst []byte) ([]byte, error) {
-	if !bytes.Contains(src, []byte(ItemsRefTag)) {
+	if !holdsRef(src) {
 		return append(dst, src...), nil
 	}
 	var m map[string]any
@@ -119,26 +130,49 @@ func (v view) InlineItemsNBT(src, dst []byte) ([]byte, error) {
 	return append(dst, b...), nil
 }
 
-// InlineItems replaces every item contents reference in m, at any depth, with the items it
-// refers to.
+// InlineItems replaces every item contents reference in m, at any depth, with the items (or
+// pages) it refers to, and every reference inside those.
 func (v view) InlineItems(m map[string]any) error {
-	if ref, ok := m[ItemsRefTag].(map[string]any); ok {
-		sum, _, _, isRef := ItemsRef(ref)
-		if !isRef {
-			return errors.New("hx: inline items: bad reference")
-		}
-		b, err := v.ItemsRecord(sum, nil)
-		if err != nil {
+	for _, t := range refTags {
+		if err := v.inlineRef(m, t[0], t[1]); err != nil {
 			return err
 		}
-		delete(m, ItemsRefTag)
-		m[itemsListTag] = nbt.RawList(b, nbt.LittleEndian)
 	}
 	for _, e := range m {
 		if err := v.inlineIn(e); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// inlineRef replaces m's reference under refTag, if any, with the list under listTag. A
+// record that holds references itself (a box's items holding a book whose pages are stored)
+// is decoded, and inlined by the caller's walk over m; any other stays raw.
+func (v view) inlineRef(m map[string]any, refTag, listTag string) error {
+	ref, ok := m[refTag].(map[string]any)
+	if !ok {
+		return nil
+	}
+	sum, _, _, isRef := ItemsRef(ref)
+	if !isRef {
+		return errors.New("hx: inline items: bad reference")
+	}
+	b, err := v.ItemsRecord(sum, nil)
+	if err != nil {
+		return err
+	}
+	delete(m, refTag)
+	raw := nbt.RawList(b, nbt.LittleEndian)
+	if !holdsRef(b) {
+		m[listTag] = raw
+		return nil
+	}
+	list, err := raw.Value()
+	if err != nil {
+		return fmt.Errorf("hx: inline items: %w", err)
+	}
+	m[listTag] = list
 	return nil
 }
 

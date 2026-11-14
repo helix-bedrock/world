@@ -87,7 +87,8 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   so items moved between a player and a container never land on one side only. Item contents (`hx/items.go`, `hxdb/items.go`): the items held
   inside an item (a shulker box's `Items`) may live in `items.hx`, keyed by their SHA-256,
   committed on their own (`StoreItems`) before any `helix:items` reference to them is saved;
-  export puts `Items` back (`InlineItemsNBT`); records no reference uses are not removed yet.
+  a book's `pages` the same way under `helix:pages`; export puts `Items` and `pages` back, at
+  any depth (`InlineItemsNBT`); records no reference uses are not removed yet.
   `KeepBlockEntities` keeps shells and their payloads as stored
   (`ObjectsWriter.KeepBlockEntity`). Chunks only shown load in a stage of
   their own: `LoadTerrain` (no objects) and `EachBlockEntityView` (block

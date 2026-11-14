@@ -142,8 +142,12 @@ without its tag type or name (an `nbt.Raw` list's bytes). The item's `tag`
 then holds `helix:items`, a compound of `sum` (byte array, the key), `size`
 (int, the body's size) and `shown` (the list as a client is shown it: no book pages), in place of
 `Items`. Records are written in a commit of their own before any reference
-to them is saved. Export puts `Items` back from the record. Records no
-reference uses are not removed yet.
+to them is saved. A written book's or a book and quill's `pages` list may be
+stored the same way: its `tag` then holds `helix:pages` (`sum` and `size`, no
+`shown`) in place of `pages`. A record may itself hold `helix:pages`
+references (a box's items holding such a book). Export puts `Items` and
+`pages` back from the records, at any depth. Records no reference uses are
+not removed yet.
 
 ## Record store files
 
