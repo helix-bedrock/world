@@ -5,8 +5,50 @@ the `.github` repo's `API_DESIGN.md`, "World data redesign", sections 4 to 6.
 All integers are little-endian; varints are unsigned LEB128 (Go's
 `binary.AppendUvarint`). Checksums are CRC-32C (Castagnoli).
 
-This file grows with the code: the record store (`hx/store`) is described
-here; the chunk parts, block table, players and level data come next.
+This file grows with the code: the record store (`hx/store`), the block
+table and the terrain record are described here; the other chunk parts,
+players and level data come next.
+
+## Record kinds
+
+| Kind | Record |
+| --- | --- |
+| 1 | block table entry (`blocks.hx`) |
+| 2 | chunk terrain |
+
+## Block table (`blocks.hx`)
+
+Every block state the world's chunks use, once. Key: the entry's ID as a
+big-endian u32; IDs run from 0 with none missing and never change. Body: the
+block state exactly as BDS stores it in a sub chunk palette, one
+little-endian NBT compound (`name`, `states`, `version`). Entries converted
+from a BDS world keep BDS's bytes, whatever version wrote them; entries Helix
+adds are written in the current form (states sorted by name, version
+`chunk.CurrentBlockVersion`). A state the server does not know is kept, so it
+exports unchanged. The table is written in the same save round as the chunks
+that first use its new entries.
+
+## Terrain record
+
+A format version byte (1), then sections: a tag byte, the body length
+(varint), the body. A reader skips tags it does not know.
+
+| Tag | Section | Body |
+| --- | --- | --- |
+| 1 | chunk key | the BDS key's tag byte (such as `,` for the chunk version), then its value as BDS stores it |
+| 2 | Data3D | BDS's height map (256 LE int16) and 3D biome storages, as BDS stores them |
+| 3 | sub chunk | see below |
+| 4 | raw sub chunk | the sub chunk's Y index (i8), then the sub chunk as BDS stores it, NBT palettes and all |
+
+**Sub chunk** (tag 3): Y index (i8, -4 for the Overworld's lowest), the BDS
+sub chunk version it is written back with (8 or 9), the layer count (at most
+8), then per layer: bits per index (0, 1, 2, 3, 4, 5, 6, 8 or 16), the packed
+indices as BDS stores them (LE u32 words, as many as the bits need: none for
+0 bits), the palette length (varint, 1 to 4096), then each palette entry as a
+block table ID (varint). Every index must point into the palette.
+
+Raw sub chunks hold what the converter could not translate exactly. Sub
+chunks with no layers are not written.
 
 ## Record store files
 

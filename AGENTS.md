@@ -45,6 +45,12 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   rounds must stay at 0 allocations (`bench_test.go`). `TestCrash` stops a
   fake disk (`memfs_test.go`) at random moments, losing or tearing unforced
   writes; any change to write order must keep it passing.
+- `hx`: the Helix world format on top of `hx/store`: the block table
+  (`blocks.go`, every block state once as BDS's palette bytes, IDs resolved
+  to runtime IDs) and the chunk terrain record (`terrain.go`, `chunk.go`:
+  packed words as BDS stores them, palettes of block table IDs, the small
+  BDS chunk keys kept byte for byte). Decoding a terrain record must stay
+  at 0 allocations (`BenchmarkDecodeTerrain`).
 - `chunk`: chunks, sub chunks, palettes and paletted storage; disk and network
   encoding; `Upgrader` for legacy (pre-1.13) IDs and old block states.
 - `blockupgrader`: applies pmmp's block upgrade schemas in `schemas/`.
