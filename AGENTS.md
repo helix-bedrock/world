@@ -40,8 +40,9 @@ go test -run=^$ -fuzz=FuzzDiskDecode -fuzztime=30s ./chunk
   `Config.LoadBudget`, `loadgate.go`), the
   5-second write buffer in `buffer.go`, block entities read and written one
   compound at a time in `blockentities.go` (`EachBlockEntity`,
-  `LoadBlockEntity`, `Config.SkipBlockEntities`; a save keeping stored
-  compounds of a big value copies them as a stream), the chunk metadata in `meta.go`, height
+  `LoadBlockEntity`, `Config.SkipBlockEntities`; a big value, kept stored
+  compounds and new ones alike, is written as a stream, each compound
+  encoded as the flush writes it), the chunk metadata in `meta.go`, height
   maps in `heightmap.go`, players in `player.go`, the `KV`/`WorldStore`/
   `PlayerStore` interfaces and plugin namespaces in `store.go`.
 - `mcdb/leveldat`: `level.dat` reading and writing.

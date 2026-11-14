@@ -117,21 +117,20 @@ func (db *DB) kvStream(key []byte) (io.ReadCloser, int64, error) {
 }
 
 // storeBlockEntities writes the chunk's block entities, or deletes the key when there are
-// none, as BDS does. The compounds of those at keep are copied from the value stored now:
-// in memory for a small one, as a stream written at the flush for a big one.
+// none, as BDS does. The compounds of those at keep are copied from the value stored now. A
+// value of bigValue or more is written as a stream at the flush, each block entity encoded
+// as it is written, so neither the stored value nor the new one is ever held whole; a
+// smaller one is put together in memory.
 func (db *DB) storeBlockEntities(t *txn, k dbKey, blockEntities []chunk.BlockEntity, keep []cube.Pos) error {
-	live := db.encodeBlockEntities(blockEntities)
 	key := k.Sum(keyBlockEntities)
-	if len(keep) == 0 {
-		if len(live) == 0 {
-			t.Delete(key)
-		} else {
-			t.Put(key, live)
-		}
+	if len(keep) == 0 && len(blockEntities) == 0 {
+		t.Delete(key)
 		return nil
 	}
-	src := db.source(key)
-	s := &streamValue{src: src, keep: keep, live: live}
+	s := &streamValue{keep: keep, live: blockEntities, log: db.conf.Log}
+	if len(keep) > 0 {
+		s.src = db.source(key)
+	}
 	size, err := s.count()
 	if err != nil {
 		return fmt.Errorf("read kept: %w", err)
@@ -164,31 +163,29 @@ func (db *DB) source(key []byte) func() (io.ReadCloser, int64, error) {
 	return func() (io.ReadCloser, int64, error) { return db.kvStream(key) }
 }
 
-// encodeBlockEntities encodes the block entities in memory, the compounds of those given
-// raw as they are.
-func (db *DB) encodeBlockEntities(blockEntities []chunk.BlockEntity) []byte {
-	buf := bytes.NewBuffer(nil)
-	enc := nbt.NewEncoderWithEncoding(buf, nbt.LittleEndian)
-	for _, b := range blockEntities {
-		if b.Raw != nil {
-			buf.Write(b.Raw)
-			continue
-		}
-		b.Data["x"], b.Data["y"], b.Data["z"] = int32(b.Pos[0]), int32(b.Pos[1]), int32(b.Pos[2]) //nolint:gosec // block coordinates fit in int32
-		if err := enc.Encode(b.Data); err != nil {
-			db.conf.Log.Error("store block entities: encode nbt: " + err.Error())
-		}
+// encodeBlockEntity appends the compound of b to buf: as stored if given raw, else its data
+// with its position.
+func encodeBlockEntity(buf *bytes.Buffer, b chunk.BlockEntity) error {
+	if b.Raw != nil {
+		buf.Write(b.Raw)
+		return nil
 	}
-	return buf.Bytes()
+	b.Data["x"], b.Data["y"], b.Data["z"] = int32(b.Pos[0]), int32(b.Pos[1]), int32(b.Pos[2]) //nolint:gosec // block coordinates fit in int32
+	return nbt.NewEncoderWithEncoding(buf, nbt.LittleEndian).Encode(b.Data)
 }
 
 // streamValue is a block entity value put together as it is read: the compounds at keep
-// copied from src, then live. Kept compounds missing from src are an error: the caller holds
-// nothing else of them, so the save must not go on as if they were gone.
+// copied from src, then those of live, each encoded when it is reached. Kept compounds
+// missing from src are an error: the caller holds nothing else of them, so the save must not
+// go on as if they were gone. live is read again at each read: the caller hands its block
+// entities' data to the save and changes it no more.
 type streamValue struct {
+	// src is the stored value the kept compounds come from, nil with none kept.
 	src  func() (io.ReadCloser, int64, error)
 	keep []cube.Pos
-	live []byte
+	live []chunk.BlockEntity
+	// log reports a live block entity that does not encode, which is left out.
+	log interface{ Error(msg string, args ...any) }
 	// keepSet is keep as a set, made on the first read.
 	keepSet map[cube.Pos]struct{}
 	// size is the value's size, counted when it was stored.
@@ -208,6 +205,9 @@ func (s *streamValue) count() (int64, error) {
 
 // open starts reading the value.
 func (s *streamValue) open() (io.ReadCloser, int64, error) {
+	if s.src == nil {
+		return &keptReader{v: s, err: io.EOF}, s.size, nil
+	}
 	src, size, err := s.src()
 	if err != nil {
 		return nil, 0, err
@@ -228,7 +228,8 @@ type keptReader struct {
 	cr    *nbt.CompoundReader
 	cur   []byte // what is left of the compound being read
 	found int
-	live  int // how much of the live part is read, once the kept part is done
+	live  int          // the next live block entity, once the kept part is done
+	buf   bytes.Buffer // the live compound being read
 	err   error
 }
 
@@ -244,12 +245,22 @@ func (r *keptReader) Read(p []byte) (int, error) {
 	if r.err != io.EOF {
 		return 0, r.err
 	}
-	if r.live >= len(r.v.live) {
-		return 0, io.EOF
+	for r.buf.Len() == 0 {
+		if r.live >= len(r.v.live) {
+			return 0, io.EOF
+		}
+		b := r.v.live[r.live]
+		r.live++
+		r.buf.Reset()
+		if err := encodeBlockEntity(&r.buf, b); err != nil {
+			// Left out whole, as a save in memory leaves it out.
+			r.buf.Reset()
+			if r.v.log != nil {
+				r.v.log.Error("store block entities: encode nbt: "+err.Error(), "pos", b.Pos)
+			}
+		}
 	}
-	n := copy(p, r.v.live[r.live:])
-	r.live += n
-	return n, nil
+	return r.buf.Read(p)
 }
 
 // nextKept moves to the next kept compound of the source, or gives io.EOF once all are read.
@@ -277,7 +288,12 @@ func (r *keptReader) nextKept() error {
 	}
 }
 
-func (r *keptReader) Close() error { return r.src.Close() }
+func (r *keptReader) Close() error {
+	if r.src == nil {
+		return nil
+	}
+	return r.src.Close()
+}
 
 // rawBlockPos reads the position of a stored block entity compound, reading past everything
 // else.

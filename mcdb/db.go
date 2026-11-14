@@ -418,7 +418,9 @@ func (db *DB) scheduledUpdates(rd *chunkReader, k dbKey, tag byte) ([]chunk.Sche
 
 // StoreColumn stores a column at a position in a dimension. The column is
 // buffered and reaches LevelDB with the next flush, in one batch with
-// everything else stored until then.
+// everything else stored until then. Big block entity values are encoded
+// as the flush writes them, so the caller must not change the block
+// entities' data after handing it over.
 func (db *DB) StoreColumn(pos ChunkPos, dim Dimension, col *chunk.Column) error {
 	if db.conf.Blocks == nil {
 		return fmt.Errorf("store column %v: %w", pos, ErrNoBlocks)
