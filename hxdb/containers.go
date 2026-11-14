@@ -142,6 +142,20 @@ func (db *DB) splitContainers(sc *splitScratch, dim hx.Dimension, pos hx.ChunkPo
 // an older one at its position are left to override it.
 func (db *DB) splitOne(sc *splitScratch, dim hx.Dimension, pos hx.ChunkPos, be chunk.BlockEntity) (chunk.BlockEntity, error) {
 	at := hx.Local(be.Pos[0], be.Pos[1], be.Pos[2])
+	if be.Raw != nil && bytes.Contains(be.Raw, []byte(hx.LightMarker)) {
+		m, err := nbt.DecodeWithout(be.Raw, nbt.LittleEndian, nil)
+		if err != nil {
+			return be, err
+		}
+		be = chunk.BlockEntity{Pos: be.Pos, Data: m}
+	}
+	if _, light := be.Data[hx.LightMarker]; light && be.Raw == nil {
+		// Given back as read light: its stored slots are the real items, kept as they are.
+		rest := maps.Clone(be.Data)
+		delete(rest, itemsField)
+		delete(rest, hx.LightMarker)
+		return chunk.BlockEntity{Pos: be.Pos, Data: rest}, nil
+	}
 	var ok bool
 	if be.Raw == nil {
 		sc.items, ok = splitItems(be.Data, sc.items)

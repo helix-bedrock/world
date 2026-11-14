@@ -178,6 +178,13 @@ type ItemScratch struct {
 	summary, slot []byte
 }
 
+// LightMarker is the byte field WithItems adds to a compound whose Items are light (without
+// their tags). A store given such a compound back must keep the container's stored slots.
+const LightMarker = "helix:light_items"
+
+// lightMarkerField is LightMarker as an encoded byte field set to 1.
+var lightMarkerField = append(append([]byte{1, byte(len(LightMarker)), 0}, LightMarker...), 1)
+
 const (
 	itemsField     = "Items"
 	nbtTagList     = 9
@@ -207,6 +214,7 @@ func (v view) WithItems(dim Dimension, pos ChunkPos, at LocalPos, shell []byte, 
 			return dst, err
 		}
 		dst = append(dst, field...)
+		dst = append(dst, lightMarkerField...)
 		return append(dst, 0), nil
 	}
 	slots, err := SummarySlots(sc.summary)
