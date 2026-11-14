@@ -70,10 +70,17 @@ func (b *Batch) Size() int { return len(b.arena) }
 // Len is the number of writes in the batch.
 func (b *Batch) Len() int { return len(b.ops) }
 
-// Reset empties the batch, keeping its memory.
+// keepArena is the biggest buffer a batch keeps across Reset: a round that
+// held a huge value does not pin that much memory for the rest of the run.
+const keepArena = 32 << 20
+
+// Reset empties the batch, keeping its memory unless it grew past keepArena.
 func (b *Batch) Reset() {
 	clear(b.ops) // drop the OpenFuncs
 	b.ops, b.arena = b.ops[:0], b.arena[:0]
+	if cap(b.arena) > keepArena {
+		b.arena = nil
+	}
 }
 
 func (b *Batch) key(o *op) []byte   { return b.arena[o.keyOff : o.keyOff+o.keyLen] }

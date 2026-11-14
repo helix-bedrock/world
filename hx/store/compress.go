@@ -41,6 +41,10 @@ const (
 	// maxDecoded caps what one Get decodes into memory; bigger records are read
 	// with GetStream.
 	maxDecoded = 1 << 30
+	// streamCompressAt is the body size from which a body is compressed through
+	// a stream encoder, whose history is its window: EncodeAll keeps a history
+	// as big as the biggest body it was given, for as long as the store is open.
+	streamCompressAt = 1 << 20
 )
 
 // codec compresses and decompresses record bodies. EncodeAll and DecodeAll are
@@ -54,7 +58,9 @@ type codec struct {
 }
 
 func newCodec(l Level) (*codec, error) {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(l.zstd()), zstd.WithEncoderCRC(false))
+	// Commits run one at a time: one encoder is enough, and each one kept costs
+	// its history.
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(l.zstd()), zstd.WithEncoderCRC(false), zstd.WithEncoderConcurrency(1))
 	if err != nil {
 		return nil, fmt.Errorf("store: zstd encoder: %w", err)
 	}
@@ -73,11 +79,44 @@ func (c *codec) compressAppend(dst, body []byte) ([]byte, byte) {
 		return append(dst, body...), compNone
 	}
 	start := len(dst)
-	out := c.enc.EncodeAll(body, dst)
+	out := dst
+	if len(body) >= streamCompressAt {
+		out = c.streamAppend(dst, body)
+	} else {
+		out = c.enc.EncodeAll(body, dst)
+	}
 	if len(out)-start >= len(body) {
 		return append(out[:start], body...), compNone
 	}
 	return out, compZstd
+}
+
+// streamAppend compresses a big body through a pooled stream encoder,
+// appending to dst. It returns dst unchanged (stored uncompressed) if the
+// encoder fails.
+func (c *codec) streamAppend(dst, body []byte) []byte {
+	w := &appender{b: dst}
+	e, err := c.streamEncoder(w, int64(len(body)))
+	if err != nil {
+		return dst
+	}
+	defer c.putStreamEncoder(e)
+	if _, err := e.Write(body); err != nil {
+		_ = e.Close()
+		return dst
+	}
+	if err := e.Close(); err != nil {
+		return dst
+	}
+	return w.b
+}
+
+// appender is an io.Writer appending to a slice.
+type appender struct{ b []byte }
+
+func (a *appender) Write(p []byte) (int, error) {
+	a.b = append(a.b, p...)
+	return len(p), nil
 }
 
 // decode writes the decompressed body into dst[:0].
