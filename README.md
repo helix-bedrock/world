@@ -9,7 +9,7 @@
 
 [![Minecraft](https://img.shields.io/badge/minecraft-v1.26.60_%7C_1.26.62_(Bedrock)-black)](https://feedback.minecraft.net/hc/en-us/sections/360001186971-Release-Changelogs)
 [![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-noncommercial-orange)](LICENSE)
 [![Status](https://img.shields.io/badge/status-in_development-orange)](STATUS.md)
 
 </div>
@@ -25,7 +25,7 @@ byte, so we wrote our own. Owning the code also lets us optimize reading and wri
 (copy-on-write snapshots, batched writes, pluggable stores) without ever changing what ends up on
 disk.
 
-world is part of [Helix](https://github.com/helix-bedrock), an open-source Bedrock server engine in
+world is part of [Helix](https://github.com/helix-bedrock), a source-available Bedrock server engine in
 Go, but it does not depend on the engine and is a plain library that any Go project can use.
 
 ## How it is checked
@@ -100,6 +100,13 @@ updates, world will be updated to the new version. The project is maintained.
 
 ## License
 
-world is licensed under [MIT](LICENSE). Ported code and its sources (goleveldb, Dragonfly,
-worldupgrader, pmmp's schemas) are listed in [CREDITS.md](CREDITS.md); their licenses are in
-[`licenses/`](licenses). API docs: <https://pkg.go.dev/github.com/helix-bedrock/world>
+Noncommercial use only: [PolyForm Noncommercial 1.0.0](LICENSE) with Helix's
+[extra permissions](ADDITIONAL-PERMISSIONS.md). Anyone may use it, run servers with it
+(even ones that make money) and sell their own plugins, but nobody may sell Helix or its
+code. Helix's game behaviour is re-engineered from Minecraft's Bedrock Dedicated Server;
+see [NOTICE.md](NOTICE.md). Not an official Minecraft product. Not approved by or
+associated with Mojang or Microsoft.
+
+Code first imported from goleveldb, Dragonfly and worldupgrader, and pmmp's schemas, keep
+their original licenses; see [CREDITS.md](CREDITS.md) and [`licenses/`](licenses).
+API docs: <https://pkg.go.dev/github.com/helix-bedrock/world>
